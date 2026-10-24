@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { AgentInfo } from 'claude-code'
 
-import { buildAgentTree, formatElapsed, mergeAgents, statusText, stripUnsafeChars, tabTitle } from '../hooks/agents'
+import { buildAgentTree, formatElapsed, mergeAgents, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from '../hooks/agents'
 import type { AgentRow } from '../types'
 
 const info = (overrides: Partial<AgentInfo> & Pick<AgentInfo, 'id'>): AgentInfo => ({
@@ -294,5 +294,106 @@ describe('buildAgentTree', () => {
 
   test('is empty with no active agent', async () => {
     expect(buildAgentTree([row({ id: 'a', status: 'failed', endedAt: 1 })])).toEqual([])
+  })
+})
+
+describe('ttyFromPs', () => {
+  const OWN = 'ps -A -ww -o pid= -o ppid= -o tty= -o command='
+  const macTree = `
+    1     0 ??       /sbin/launchd
+  400     1 ttys010  -zsh
+  500   400 ttys010  claude
+  600   500 ??       ${OWN}
+`
+
+  test('finds the tty of the shell above Claude Code on macOS', async () => {
+    expect(ttyFromPs(macTree, OWN)).toBe('/dev/ttys010')
+  })
+
+  test('supports Linux procps pts ttys', async () => {
+    const out = `
+    1     0 ?        /sbin/init
+  400     1 pts/3    bash
+  500   400 ?        claude
+  600   500 ?        ${OWN}
+`
+    expect(ttyFromPs(out, OWN)).toBe('/dev/pts/3')
+  })
+
+  test('matches the own row when argv[0] has an absolute path', async () => {
+    const out = macTree.replace(OWN, `/bin/${OWN}`)
+    expect(ttyFromPs(out, OWN)).toBe('/dev/ttys010')
+  })
+
+  test('returns undefined when the own row is missing', async () => {
+    expect(ttyFromPs(macTree.replace(OWN, 'sleep 1'), OWN)).toBeUndefined()
+  })
+
+  test('returns undefined when every process up to pid 1 has no tty', async () => {
+    const out = `1 0 ?? /sbin/launchd\n500 1 ?? claude\n600 500 ?? ${OWN}`
+    expect(ttyFromPs(out, OWN)).toBeUndefined()
+  })
+
+  test('does not use the tty of pid 1', async () => {
+    const out = `1 0 ttys001 /sbin/launchd\n500 1 ?? claude\n600 500 ?? ${OWN}`
+    expect(ttyFromPs(out, OWN)).toBeUndefined()
+  })
+
+  test('returns undefined for empty output and ignores headers and garbage', async () => {
+    expect(ttyFromPs('', OWN)).toBeUndefined()
+    expect(ttyFromPs(`  PID  PPID TTY COMMAND\nnot a row\n${macTree}\n???`, OWN)).toBe('/dev/ttys010')
+  })
+
+  test('terminates on a parent cycle', async () => {
+    const out = `1 0 ?? /sbin/launchd\n700 600 ?? foo\n600 700 ?? ${OWN}`
+    expect(ttyFromPs(out, OWN)).toBeUndefined()
+  })
+
+  test('returns undefined when a parent is missing', async () => {
+    const out = `1 0 ?? /sbin/launchd\n600 999 ?? ${OWN}`
+    expect(ttyFromPs(out, OWN)).toBeUndefined()
+  })
+
+  test('does not keep climbing past an unsafe tty', async () => {
+    const grand = '300 1 ttys010 -zsh'
+    for (const tty of ['console', 'ttys0;x']) {
+      const out = `1 0 ?? /sbin/launchd\n${grand}\n500 300 ${tty} claude\n600 500 ?? ${OWN}`
+      expect(ttyFromPs(out, OWN)).toBeUndefined()
+    }
+  })
+
+  test('parses commands with several spaces or tabs and tabs between columns', async () => {
+    const out = `1 0 ?? /sbin/launchd\n400\t1\tttys010\t-zsh\n500 400 ttys010   claude\n600 500 ??\t${OWN}\t`
+    expect(ttyFromPs(out, OWN)).toBe('/dev/ttys010')
+  })
+
+  test('does not match a command with extra spaces inside', async () => {
+    const out = macTree.replace(OWN, OWN.replace('-A -ww', '-A  -ww'))
+    expect(ttyFromPs(out, OWN)).toBeUndefined()
+  })
+
+  test('with several rows of the same command, requires them to agree', async () => {
+    const same = `${macTree}\n601 500 ?? ${OWN}`
+    expect(ttyFromPs(same, OWN)).toBe('/dev/ttys010')
+    const other = `${same}\n450 1 ttys020 -zsh\n602 450 ?? ${OWN}`
+    expect(ttyFromPs(other, OWN)).toBeUndefined()
+  })
+})
+
+describe('titleSequence', () => {
+  test('wraps the title in an OSC 0 sequence terminated by BEL', async () => {
+    expect(titleSequence('🤖 2 agentes')).toBe('\u001b]0;🤖 2 agentes\u0007')
+  })
+
+  test('keeps semicolons and spaces, which are valid inside an OSC title', async () => {
+    expect(titleSequence('a; b;c')).toBe('\u001b]0;a; b;c\u0007')
+  })
+
+  test('returns an empty title for an empty string', async () => {
+    expect(titleSequence('')).toBe('\u001b]0;\u0007')
+  })
+
+  test('removes escape, bell and control characters from the title', async () => {
+    expect(titleSequence('a\u001b]0;x\u0007b\nc')).toBe('\u001b]0;a]0;xbc\u0007')
   })
 })

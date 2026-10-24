@@ -26,9 +26,14 @@ Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API
 ## Qué ejecuta y qué datos usa
 
 - **Solo lee la lista de agentes de la sesión** que le da Claude Code. No guarda nada en disco y no hace ninguna llamada de red.
-- **Para el título de la pestaña ejecuta dos comandos de `sh`**, ambos visibles en `hooks/register.tsx`:
-  - Uno busca el terminal de la sesión subiendo por los procesos padre con `ps -o ppid= -o tty=` hasta encontrar un dispositivo `/dev/tty…`.
-  - Otro escribe en ese terminal la secuencia OSC 0 (`printf "\033]0;%s\007"`) con el título.
+- **Para el título de la pestaña ejecuta dos comandos con argumentos fijos, sin `sh` ni ningún otro shell; los dos se ven en `hooks/register.tsx`:**
+  - `ps -A -ww -o pid= -o ppid= -o tty= -o command=`, una vez al empezar la sesión: localiza su propia fila en la lista de procesos y sube por los padres hasta el primer terminal (`/dev/ttys…` o `/dev/pts/…`).
+    - **Qué lee:** el pid, el proceso padre, el terminal y la línea de comando completa de todos los procesos del sistema, incluidos los de otros programas y usuarios con sus argumentos.
+    - **Por qué la línea de comando:** la API de mods no da el pid del proceso de Claude Code, así que el mod reconoce la fila de su propio `ps` por su línea de comando exacta; el resto de columnas basta para subir por los padres. Con solo el nombre del programa (`ps`) habría ambigüedad cuando hay otro `ps` en marcha.
+    - **Qué hace con ello:** lo lee solo en memoria, una vez, para encontrar el terminal; no lo guarda, no lo registra y no lo envía a ningún sitio.
+  - `tee /dev/<terminal>`: recibe por la entrada estándar la secuencia OSC 0 (`ESC ]0;` + título + `BEL`) y la escribe en ese terminal. Solo escribe en una ruta `/dev/tty…` o `/dev/pts/…` sacada de la salida de `ps`.
+- Sin terminal, si `ps` no está disponible, falla o su salida llega truncada, no escribe ningún título.
+- Si una escritura del título falla, se reintenta en el siguiente tick sin afectar al panel.
 - Claude Code puede cambiar el título por su cuenta; el mod lo vuelve a escribir cada 10 s mientras hay agentes.
 - Los nombres y descripciones de los agentes se limpian de caracteres de control e invisibles antes de mostrarse o de escribirse en el título.
 
@@ -41,11 +46,12 @@ Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API
 Desde la raíz del repositorio:
 
 ```sh
-claude plugin validate .
+claude plugin validate . --profile directory
+claude plugin validate . --strict
 claude plugin test .
 ```
 
-- `hooks/agents.ts`: lógica pura (árbol, tiempos, saneado de texto). Tests en `tests/agents.test.ts`.
+- `hooks/agents.ts`: lógica pura (árbol, tiempos, saneado de texto, búsqueda del terminal en la salida de `ps` y secuencia del título). Tests en `tests/agents.test.ts`.
 - `hooks/register.tsx`: engancha los eventos y dibuja el panel. Tests en `tests/register.test.tsx`, que simulan el motor con hooks por debajo del plugin (`agent.list`, `ui.open`, `ui.status` y `process.run` para el título).
 
 ## Licencia

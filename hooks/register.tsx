@@ -2,24 +2,19 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
 import type { AgentRow, AgentRowStatus, AgentTreeLine } from '../types'
-import { buildAgentTree, formatElapsed, isActive, isLive, mergeAgents, statusText, stripUnsafeChars, tabTitle } from './agents'
+import { buildAgentTree, formatElapsed, isActive, isLive, mergeAgents, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from './agents'
 
 const PANE = 'agentes'
 const PANE_TITLE = 'Agentes'
 const TICK_MS = 1000
 const TITLE_REFRESH_TICKS = 10
 const IDLE_TAB_TITLE = 'Claude Code'
-const TTY_PATH = /^\/dev\/(ttys?\d+|pts\/\d+)$/
+const PROCESS_TIMEOUT_MS = 5000
 
-// Walks up from the shell to the first ancestor attached to a terminal
-// (the claude process) and prints its device, e.g. /dev/ttys010. `set -f`
-// keeps `?`/`??` (no terminal on Linux/macOS) from globbing against the cwd.
-const FIND_TTY_SCRIPT =
-  'set -f; p=$$; while [ "$p" -gt 1 ]; do set -- $(ps -o ppid= -o tty= -p "$p"); ' +
-  '[ -n "$1" ] || exit 1; ' +
-  'case "$2" in ""|"?"|"??") ;; *) echo "/dev/$2"; exit 0 ;; esac; p=$1; done; exit 1'
-// OSC 0: sets the tab and window title in Warp, iTerm2, Terminal.app and others.
-const WRITE_TITLE_SCRIPT = 'printf "\\033]0;%s\\007" "$1" > "$2"'
+// `command` goes last because it holds spaces. `-ww` stops ps from cutting the
+// width when its output is not a terminal. Our own row is recognised by this
+// exact line.
+const PS_ARGV = ['ps', '-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'tty=', '-o', 'command='] as const
 
 const agents = atom({ plugin: 'agentes-activos', key: 'agents' } as const, [])
 const now = atom({ plugin: 'agentes-activos', key: 'now' } as const, 0)
@@ -55,16 +50,18 @@ const session: {
 } = { ticksSinceTitle: 0, isTicking: false, hasAutoOpened: false }
 
 async function findTty($: EngineInterface): Promise<string | undefined> {
-  const { exitCode, stdout } = await $.process.run(['sh', '-c', FIND_TTY_SCRIPT], { timeoutMs: 5000 })
-  const path = stdout.trim()
+  const { exitCode, stdout, isStdoutTruncated } = await $.process.run(PS_ARGV, { timeoutMs: PROCESS_TIMEOUT_MS })
+  // A partial process list could point at a terminal that is not ours.
+  if (exitCode !== 0 || isStdoutTruncated) return undefined
 
-  return exitCode === 0 && TTY_PATH.test(path) ? path : undefined
+  return ttyFromPs(stdout, PS_ARGV.join(' '))
 }
 
 async function writeTitle($: EngineInterface, title: string): Promise<void> {
   if (!session.ttyPath) return
-  const { exitCode } = await $.process.run(['sh', '-c', WRITE_TITLE_SCRIPT, 'sh', title, session.ttyPath], {
-    timeoutMs: 5000,
+  const { exitCode } = await $.process.run(['tee', session.ttyPath], {
+    stdin: titleSequence(title),
+    timeoutMs: PROCESS_TIMEOUT_MS,
   })
   if (exitCode !== 0) throw new Error(`title write exited with ${exitCode}`)
 }
@@ -77,12 +74,12 @@ async function syncTitle($: EngineInterface, rows: AgentRow[]): Promise<void> {
   const isDue = title !== undefined && session.ticksSinceTitle >= TITLE_REFRESH_TICKS
   if (title === session.lastTitle && !isDue) return
 
-  session.ticksSinceTitle = 0
   const wasShowingAgents = session.lastTitle !== undefined
   if (title !== undefined) await writeTitle($, title)
   else if (wasShowingAgents) await writeTitle($, IDLE_TAB_TITLE)
   // Set only after a write that worked, so a failed one is retried next tick.
   session.lastTitle = title
+  session.ticksSinceTitle = 0
 }
 
 async function tick($: EngineInterface): Promise<void> {

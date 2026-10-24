@@ -97,39 +97,198 @@ describe('Pane', () => {
 })
 
 describe('tab title', () => {
-  test('writes the running agents to the terminal found at start', async ($, on) => {
-    const clock = mock.clock(on)
-    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
-    const written: string[] = []
-    on('session.start', (_$, e) => ({ cwd: e.cwd }))
-    on('command.register', () => ({ value: { command: 'agentes' } }))
-    on('process.run', (_$, e) => {
-      const isFindTty = e.argv.length === 3
-      if (isFindTty) return { value: { exitCode: 0, stdout: '/dev/ttys010\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-      written.push(`${e.argv[4]} > ${e.argv[5]}`)
-      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    })
-
-    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-    await clock.advance(1000)
-
-    expect(written).toEqual(['🤖 1 agente · tester > /dev/ttys010'])
+  const TITLE = '\u001b]0;🤖 1 agente · tester\u0007'
+  const processResult = (exitCode: number, stdout = '', isStdoutTruncated = false) => ({
+    value: { exitCode, stdout, stderr: '', isStdoutTruncated, isStderrTruncated: false },
   })
 
-  test('ignores a terminal path that is not a tty', async ($, on) => {
-    const clock = mock.clock(on)
-    engineBeneath(on, [agent({ id: 'a' })])
+  // Answers `process.run`: a synthetic process table for ps (our own row uses
+  // the exact argv we sent) and a recorder for tee.
+  const processesBeneath = (
+    on: On,
+    options: {
+      psExitCode?: number
+      isPsTruncated?: boolean
+      tty?: string
+      teeExitCodes?: number[]
+      doesPsThrow?: boolean
+      teeThrowsAt?: number[]
+    } = {},
+  ) => {
+    const { psExitCode = 0, isPsTruncated = false, tty = 'ttys010', teeExitCodes = [], doesPsThrow = false, teeThrowsAt = [] } = options
     const calls: string[][] = []
+    const writes: { argv: string[]; stdin?: string }[] = []
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     on('command.register', () => ({ value: { command: 'agentes' } }))
     on('process.run', (_$, e) => {
       calls.push([...e.argv])
-      return { value: { exitCode: 0, stdout: '/etc/passwd\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      if (e.argv[0] === 'ps') {
+        if (doesPsThrow) throw new Error('ps unavailable')
+        const table = [
+          '    1     0 ??       /sbin/launchd',
+          `  400     1 ${tty}  -zsh`,
+          `  500   400 ${tty}  claude`,
+          `  600   500 ??       ${e.argv.join(' ')}`,
+        ].join('\n')
+
+        return processResult(psExitCode, table, isPsTruncated)
+      }
+      writes.push({ argv: [...e.argv], stdin: e.init?.stdin })
+      if (teeThrowsAt.includes(writes.length - 1)) throw new Error('tee unavailable')
+
+      return processResult(teeExitCodes[writes.length - 1] ?? 0)
     })
 
-    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    return { calls, writes }
+  }
+
+  const start = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
+    $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+
+  test('writes the running agents to the terminal found at start', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { calls, writes } = processesBeneath(on)
+
+    await start($)
     await clock.advance(1000)
 
-    expect(calls.length).toBe(1)
+    expect(writes).toEqual([{ argv: ['tee', '/dev/ttys010'], stdin: TITLE }])
+    expect(calls.filter(argv => argv[0] === 'ps').length).toBe(1)
+    expect(calls.some(argv => argv[0] === 'sh')).toBe(false)
+  })
+
+  test('writes nothing when no terminal is found', async ($, on) => {
+    const clock = mock.clock(on)
+    const engine = engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { calls } = processesBeneath(on, { tty: '??' })
+
+    await start($)
+    await clock.advance(1000)
+
+    expect(calls.map(argv => argv[0])).toEqual(['ps'])
+    expect(engine.statuses).toEqual(['🤖 1 agente en ejecución'])
+  })
+
+  test('writes nothing when ps fails', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { writes } = processesBeneath(on, { psExitCode: 1 })
+
+    await start($)
+    await clock.advance(1000)
+
+    expect(writes).toEqual([])
+  })
+
+  test('writes nothing when the ps output is truncated', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { writes } = processesBeneath(on, { isPsTruncated: true })
+
+    await start($)
+    await clock.advance(1000)
+
+    expect(writes).toEqual([])
+  })
+
+  test('retries after a failed write', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { writes } = processesBeneath(on, { teeExitCodes: [1, 0] })
+
+    await start($)
+    await clock.advance(1000)
+    await clock.advance(1000)
+
+    expect(writes).toEqual([
+      { argv: ['tee', '/dev/ttys010'], stdin: TITLE },
+      { argv: ['tee', '/dev/ttys010'], stdin: TITLE },
+    ])
+  })
+
+  test('retries a failed refresh on the next tick, not a full refresh later', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    // First write works, then ticks 2-10 write nothing, the refresh on tick 11 fails.
+    const { writes } = processesBeneath(on, { teeExitCodes: [0, 1, 0] })
+
+    await start($)
+    await clock.advance(1000)
+    await clock.advance(9000)
+    expect(writes.length).toBe(1)
+
+    await clock.advance(1000)
+    expect(writes.length).toBe(2)
+
+    await clock.advance(1000)
+    expect(writes.length).toBe(3)
+  })
+
+  test('writes nothing and keeps the status line when ps throws', async ($, on) => {
+    const clock = mock.clock(on)
+    const engine = engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { calls, writes } = processesBeneath(on, { doesPsThrow: true })
+
+    await start($)
+    await clock.advance(1000)
+    await clock.advance(1000)
+
+    expect(writes).toEqual([])
+    expect(calls.map(argv => argv[0])).toEqual(['ps'])
+    expect(engine.statuses).toEqual(['🤖 1 agente en ejecución'])
+  })
+
+  test('retries on the next tick when tee throws instead of exiting non-zero', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { writes } = processesBeneath(on, { teeThrowsAt: [0] })
+
+    await start($)
+    await clock.advance(1000)
+    await clock.advance(1000)
+    await clock.advance(1000)
+
+    expect(writes.map(write => write.stdin)).toEqual([TITLE, TITLE])
+  })
+
+  test('sends a title with ; and spaces untouched and without control characters', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'a;b \u0007c\u001b[31m\td' })])
+    const { writes } = processesBeneath(on)
+
+    await start($)
+    await clock.advance(1000)
+
+    expect(writes.map(write => write.stdin)).toEqual(['\u001b]0;🤖 1 agente · a;b c[31md\u0007'])
+  })
+
+  test('goes back to "Claude Code" once the agents end, and only once', async ($, on) => {
+    const clock = mock.clock(on)
+    const list = [agent({ id: 'a', name: 'tester' })]
+    engineBeneath(on, list)
+    const { writes } = processesBeneath(on)
+
+    await start($)
+    await clock.advance(1000)
+    list[0] = agent({ id: 'a', name: 'tester', status: 'completed' })
+    await clock.advance(1000)
+    await clock.advance(1000)
+    await clock.advance(11000)
+
+    expect(writes.map(write => write.stdin)).toEqual([TITLE, '\u001b]0;Claude Code\u0007'])
+  })
+
+  test('restores "Claude Code" on session end if a title was set', async ($, on) => {
+    const clock = mock.clock(on)
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    const { writes } = processesBeneath(on)
+    on('session.end', () => ({ sessionId: 's1' }))
+
+    await start($)
+    await clock.advance(1000)
+    await $.session.end({ sessionId: 's1' } as never)
+
+    expect(writes.map(write => write.stdin)).toEqual([TITLE, '\u001b]0;Claude Code\u0007'])
   })
 })

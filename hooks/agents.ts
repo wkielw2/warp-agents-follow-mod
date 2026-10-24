@@ -169,3 +169,57 @@ export const buildAgentTree = (rows: AgentRow[]): AgentTreeLine[] => {
 
   return lines
 }
+
+const TTY_PATH = /^\/dev\/(ttys?\d+|pts\/\d+)$/
+const NO_TTY = new Set(['?', '??'])
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*\S)\s*$/
+
+type PsRow = { pid: number; ppid: number; tty: string; command: string }
+
+const parsePsRows = (psOutput: string): Map<number, PsRow> => {
+  const rows = new Map<number, PsRow>()
+  for (const line of psOutput.split('\n')) {
+    const match = PS_ROW.exec(line)
+    if (!match) continue
+    const pid = Number(match[1])
+    if (!rows.has(pid)) rows.set(pid, { pid, ppid: Number(match[2]), tty: match[3], command: match[4] })
+  }
+
+  return rows
+}
+
+// Walks up from `start` to the first process with a tty; an unsafe tty ends the walk.
+const ttyAbove = (start: PsRow, byPid: Map<number, PsRow>): string | undefined => {
+  const seen = new Set<number>()
+  let current: PsRow | undefined = start
+  while (current && current.pid > 1 && !seen.has(current.pid)) {
+    seen.add(current.pid)
+    if (!NO_TTY.has(current.tty)) {
+      const path = `/dev/${current.tty}`
+
+      return TTY_PATH.test(path) ? path : undefined
+    }
+    current = byPid.get(current.ppid)
+  }
+
+  return undefined
+}
+
+/**
+ * Finds the terminal of Claude Code in the output of
+ * `ps -A -ww -o pid= -o ppid= -o tty= -o command=`. The row of that same ps
+ * (matched by its exact command line, with or without a path in argv[0]) is a
+ * descendant of Claude Code; from that row it goes up through the parents to
+ * the first process with a tty, which must be a valid one.
+ * Returns undefined when it is missing, ambiguous or unsafe.
+ */
+export const ttyFromPs = (psOutput: string, ownCommand: string): string | undefined => {
+  const byPid = parsePsRows(psOutput)
+  const own = [...byPid.values()].filter(row => row.command.replace(/^\S*\//, '') === ownCommand)
+  const results = new Set(own.map(row => ttyAbove(row, byPid)))
+
+  return results.size === 1 ? [...results][0] : undefined
+}
+
+/** OSC sequence that sets the terminal tab title; the title is stripped of control characters. */
+export const titleSequence = (title: string): string => `\u001b]0;${stripUnsafeChars(title)}\u0007`
