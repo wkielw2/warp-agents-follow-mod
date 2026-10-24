@@ -37,6 +37,16 @@ Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API
 - Claude Code puede cambiar el título por su cuenta; el mod lo vuelve a escribir cada 10 s mientras hay agentes.
 - Los nombres y descripciones de los agentes se limpian de caracteres de control e invisibles antes de mostrarse o de escribirse en el título.
 
+## Eventos que engancha
+
+Todos están en `hooks/register.tsx`. Ninguno cambia lo que pasa por el evento: solo observa y dibuja.
+
+- **`session.start`**: deja que la sesión arranque primero, registra el comando `/agentes`, busca una vez el terminal para el título (el `ps` de arriba) y pone un reloj que cada segundo lee la lista de agentes.
+- **`command.run` de `/agentes`**: solo responde a su propio comando; abre el panel y lo actualiza.
+- **`agent.spawn`**: deja que Claude Code lance el agente sin tocar su petición ni su resultado y, después, abre el panel la primera vez y lo actualiza. Si el panel falla, el lanzamiento del agente sigue igual.
+- **`session.end`**: si había puesto un título, lo vuelve a dejar en «Claude Code».
+- **`ui.render` del panel `agentes`**: dibuja solo su propio panel.
+
 ## Notas
 
 - Los agentes de un workflow no aparecen: Claude Code no los incluye en su lista de agentes.
