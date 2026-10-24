@@ -64,6 +64,10 @@ claude plugin test .
 - `hooks/agents.ts`: lógica pura (árbol, tiempos, saneado de texto, búsqueda del terminal en la salida de `ps` y secuencia del título). Tests en `tests/agents.test.ts`.
 - `hooks/register.tsx`: engancha los eventos y dibuja el panel. Tests en `tests/register.test.tsx`, que simulan el motor con hooks por debajo del plugin (`agent.list`, `ui.open`, `ui.status` y `process.run` para el título).
 
+## Privacidad
+
+El mod no guarda ni envía ningún dato. Detalle en la [política de privacidad · Privacy](PRIVACY.md).
+
 ## Licencia
 
 MIT © 2026 Jose Miniñi Diego. Ver [LICENSE](LICENSE).
