@@ -1,0 +1,21 @@
+{
+  "name": "agentes-activos",
+  "version": "1.0.0",
+  "description": "Live panel with the tree of running subagents, a status bar counter and the terminal tab title. / Panel en vivo con el árbol de subagentes en ejecución, contador en la barra de estado y título de la pestaña del terminal.",
+  "author": {
+    "name": "Jose Miniñi Diego"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/wkielw2/warp-agents-follow-mod",
+  "repository": "https://github.com/wkielw2/warp-agents-follow-mod",
+  "keywords": [
+    "agents",
+    "subagents",
+    "panel",
+    "terminal",
+    "mod",
+    "agentes"
+  ],
+  "types": "./types/index.d.ts",
+  "icon": "./.claude-plugin/icon.png"
+}

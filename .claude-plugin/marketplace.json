@@ -1,0 +1,14 @@
+{
+  "name": "agentes-activos",
+  "description": "Claude Code mod: live tree of running subagents in a side panel, status bar and tab title.",
+  "owner": {
+    "name": "Jose Miniñi Diego"
+  },
+  "plugins": [
+    {
+      "name": "agentes-activos",
+      "source": "./",
+      "description": "Live panel with the tree of running subagents, a status bar counter and the terminal tab title. / Panel en vivo con el árbol de subagentes en ejecución, contador en la barra de estado y título de la pestaña del terminal."
+    }
+  ]
+}
