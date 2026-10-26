@@ -137,6 +137,11 @@ export const register: Register = on => {
       })
       .catch(() => undefined)
     $.clock.every(TICK_MS, () => tick($))
+    // Not awaited either; a pane closed afterwards is not reopened by a spawn.
+    if (e.isInteractive) {
+      session.hasAutoOpened = true
+      void openPane($).catch(() => undefined)
+    }
 
     return started
   })

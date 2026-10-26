@@ -55,6 +55,63 @@ describe('/agentes', () => {
   })
 })
 
+describe('opening at start', () => {
+  // Answers what session.start calls beneath the plugin; ps finds no terminal.
+  const startBeneath = (on: On) => {
+    on('session.start', (_$, e) => ({ cwd: e.cwd }))
+    on('command.register', () => ({ value: { command: 'agentes' } }))
+    on('process.run', () => ({
+      value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }))
+  }
+
+  test('opens the pane when an interactive session starts', async ($, on) => {
+    mock.clock(on)
+    const engine = engineBeneath(on, [])
+    startBeneath(on)
+
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+
+    expect(engine.opened).toEqual(['agentes'])
+  })
+
+  test('leaves the pane closed when the session is not interactive', async ($, on) => {
+    mock.clock(on)
+    const engine = engineBeneath(on, [])
+    startBeneath(on)
+
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false })
+
+    expect(engine.opened).toEqual([])
+  })
+
+  test('does not open it again when the first agent is spawned', async ($, on) => {
+    mock.clock(on)
+    const engine = engineBeneath(on, [agent({ id: 'a' })])
+    startBeneath(on)
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+
+    expect(engine.opened).toEqual(['agentes'])
+  })
+
+  test('starts the session even when opening the pane fails', async ($, on) => {
+    mock.clock(on)
+    on('agent.list', () => ({ value: [] }))
+    on('ui.status', () => ({ value: undefined }))
+    startBeneath(on)
+    on('ui.open', () => {
+      throw new Error('pane unavailable')
+    })
+
+    const started = await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+
+    expect(started).toEqual({ cwd: '/repo' })
+  })
+})
+
 describe('Pane', () => {
   test('tells there are no agents when none ran', async ($, on) => {
     mock.clock(on)

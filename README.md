@@ -7,7 +7,7 @@ Mod de Claude Code que muestra los subagentes en ejecución mientras trabajas: u
 ## Qué hace
 
 - **Panel «Agentes»**: árbol en vivo de los subagentes por quién lanzó a quién, con estado, modelo abreviado (`opus 5.5`, `sonnet 3.5`, `haiku`…; también entiende los ids de Bedrock y Vertex), tiempo y descripción. El modelo se toma al lanzarse cada agente, así que no aparece en los que ya corrían cuando se cargó el mod. Los terminados se quedan 5 minutos (como mucho los 10 últimos) en la sección «Terminados»; un agente terminado con algún hijo aún en ejecución sigue en el árbol, atenuado. Al salir de «Terminados», si el motor aún lo lista, el agente queda oculto (en memoria, sin guardar nada) para que no reaparezca; se olvida cuando el motor lo suelta y vuelve a mostrarse si se reanuda.
-  - Se abre solo al lanzar el primer agente si la terminal tiene 144 columnas o más. Si es más estrecha, Claude Code lo deja en espera hasta que la ensanches o lo abras con `/agentes`.
+  - Se abre solo al empezar cada sesión interactiva si la terminal tiene 144 columnas o más. Si es más estrecha, Claude Code lo deja en espera hasta que la ensanches o lo abras con `/agentes`. Si lo cierras, no vuelve a abrirse solo al lanzar un agente. En sesiones no interactivas se abre al lanzar el primer agente.
   - En cualquier momento: `/agentes`.
 - **Barra de estado**: `🤖 N agentes en ejecución` mientras haya alguno activo.
 - **Título de la pestaña** (Warp, iTerm2, Terminal.app…): `🤖 N agentes · nombres`. Al terminar vuelve a «Claude Code».
@@ -42,9 +42,9 @@ Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API
 
 Todos están en `hooks/register.tsx`. Ninguno cambia lo que pasa por el evento: solo observa y dibuja.
 
-- **`session.start`**: deja que la sesión arranque primero, registra el comando `/agentes`, busca una vez el terminal para el título (el `ps` de arriba) y pone un reloj que cada segundo lee la lista de agentes.
+- **`session.start`**: deja que la sesión arranque primero, registra el comando `/agentes`, busca una vez el terminal para el título (el `ps` de arriba), pone un reloj que cada segundo lee la lista de agentes y, si la sesión es interactiva, abre el panel.
 - **`command.run` de `/agentes`**: solo responde a su propio comando; abre el panel y lo actualiza.
-- **`agent.spawn`**: deja que Claude Code lance el agente sin tocar su petición ni su resultado y, después, guarda el modelo con el que se lanzó, abre el panel la primera vez y lo actualiza. Si el panel falla, el lanzamiento del agente sigue igual.
+- **`agent.spawn`**: deja que Claude Code lance el agente sin tocar su petición ni su resultado y, después, guarda el modelo con el que se lanzó, abre el panel si no se abrió al empezar y lo actualiza. Si el panel falla, el lanzamiento del agente sigue igual.
 - **`session.end`**: si había puesto un título, lo vuelve a dejar en «Claude Code».
 - **`ui.render` del panel `agentes`**: dibuja solo su propio panel.
 
