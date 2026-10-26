@@ -27,10 +27,39 @@ const labelOf = (info: AgentInfo): string => stripUnsafeChars(info.name ?? info.
 /** Model of each agent by id, as `agent.spawn` resolved it. */
 export type ModelsById = Readonly<Record<string, string>>
 
-const modelOf = (info: AgentInfo, models: ModelsById): string | undefined => {
-  const model = models[info.id]
+// A model id is short; anything longer is cut before it is parsed or drawn.
+const MAX_MODEL_LENGTH = 64
 
-  return model === undefined ? undefined : stripUnsafeChars(model)
+/**
+ * The model as it is kept: text alone, without unsafe characters and cut to a
+ * model id's length. Anything else (a hook beneath that broke the contract)
+ * is left out.
+ */
+export const cleanModel = (model: unknown): string | undefined => {
+  if (typeof model !== 'string') return undefined
+  const clean = Array.from(stripUnsafeChars(model)).slice(0, MAX_MODEL_LENGTH).join('').trim()
+
+  return clean === '' ? undefined : clean
+}
+
+const modelOf = (info: AgentInfo, models: ModelsById): string | undefined =>
+  Object.hasOwn(models, info.id) ? cleanModel(models[info.id]) : undefined
+
+/**
+ * Ids in the map whose agent is neither shown in the pane nor listed any
+ * more, so the map does not grow with every spawn of the session.
+ */
+export const staleModelIds = (models: ModelsById, rows: AgentRow[], infos: AgentInfo[]): string[] => {
+  const keptIds = new Set([...rows.map(row => row.id), ...infos.map(info => info.id)])
+
+  return Object.keys(models).filter(id => !keptIds.has(id))
+}
+
+/** The map without the given ids; any other entry, a newer one included, stays. */
+export const withoutModels = (models: ModelsById, ids: readonly string[]): ModelsById => {
+  const dropped = new Set(ids)
+
+  return Object.fromEntries(Object.entries(models).filter(([id]) => !dropped.has(id)))
 }
 
 const updateRow = (row: AgentRow, info: AgentInfo, now: number, models: ModelsById): AgentRow => {
@@ -110,25 +139,42 @@ export const formatElapsed = (ms: number): string => {
   return `${seconds}s`
 }
 
-const MODEL_DATE_SUFFIX = /-\d{8}$/
-const MODEL_CONTEXT_SUFFIX = /\[[^\]]*\]$/
+// Bedrock spells a model `us.anthropic.claude-…-v1:0`, Vertex `claude-…@20250929`.
+const MODEL_PROVIDER_PREFIX = /^(?:[a-z]+\.)?anthropic\./
+const MODEL_REVISION_SUFFIX = /-v\d+(?::\d+)?$/
+const MODEL_DATE_SUFFIX = /[-@]\d{8}$/
 const MODEL_FAMILY_VERSION = /^([a-z]+)-(\d+(?:-\d+)*)$/
+// Older ids put the version first: `claude-3-5-sonnet`.
+const MODEL_VERSION_FAMILY = /^(\d+(?:-\d+)*)-([a-z]+)$/
+
+// Drops a context window tag such as `[1m]` without a regex, whose search
+// would be quadratic on a long run of `[`.
+const withoutContextSuffix = (id: string): string => {
+  const start = id.lastIndexOf('[')
+
+  return id.endsWith(']') && start >= 0 ? id.slice(0, start) : id
+}
 
 /**
  * Short model name for the pane: `claude-opus-5-5` → `opus 5.5`,
- * `claude-sonnet-4-5-20250929` → `sonnet 4.5`; an alias (`haiku`) or an
- * unknown id is shown as it is, without the `claude-` prefix.
+ * `claude-sonnet-4-5-20250929`, its Bedrock or Vertex id → `sonnet 4.5`,
+ * `claude-3-5-sonnet` → `sonnet 3.5`; an alias (`haiku`) or an unknown id is
+ * shown as it is, without the `claude-` prefix.
  */
 export const modelLabel = (model: string): string => {
-  const id = stripUnsafeChars(model)
-    .trim()
-    .toLowerCase()
-    .replace(MODEL_CONTEXT_SUFFIX, '')
+  const id = withoutContextSuffix((cleanModel(model) ?? '').toLowerCase())
+    .replace(MODEL_PROVIDER_PREFIX, '')
     .replace(/^claude-/, '')
+    // Bedrock puts the revision after the date, Vertex the date after it.
+    .replace(MODEL_DATE_SUFFIX, '')
+    .replace(MODEL_REVISION_SUFFIX, '')
     .replace(MODEL_DATE_SUFFIX, '')
   const [, family, version] = MODEL_FAMILY_VERSION.exec(id) ?? []
+  if (family && version) return `${family} ${version.replaceAll('-', '.')}`
+  const [, oldVersion, oldFamily] = MODEL_VERSION_FAMILY.exec(id) ?? []
+  if (oldFamily && oldVersion) return `${oldFamily} ${oldVersion.replaceAll('-', '.')}`
 
-  return family && version ? `${family} ${version.replaceAll('-', '.')}` : id
+  return id
 }
 
 const countLabel = (count: number): string => (count === 1 ? '1 agente' : `${count} agentes`)

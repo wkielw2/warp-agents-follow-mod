@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { AgentInfo } from 'claude-code'
 
-import { buildAgentTree, formatElapsed, mergeAgents, modelLabel, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from '../hooks/agents'
+import { buildAgentTree, cleanModel, formatElapsed, mergeAgents, modelLabel, staleModelIds, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs, withoutModels } from '../hooks/agents'
 import type { AgentRow } from '../types'
 
 const info = (overrides: Partial<AgentInfo> & Pick<AgentInfo, 'id'>): AgentInfo => ({
@@ -158,10 +158,78 @@ describe('mergeAgents with models', () => {
     expect(rows[0]?.model).toBeUndefined()
   })
 
+  test('ignores a model that is not text or an inherited property', async () => {
+    const models = { a: 42 } as unknown as Record<string, string>
+    const rows = mergeAgents([], [info({ id: 'a' }), info({ id: 'toString' })], 1000, models)
+
+    expect(rows.map(one => one.model)).toEqual([undefined, undefined])
+  })
+
   test('strips control characters from the model', async () => {
     const rows = mergeAgents([], [info({ id: 'a' })], 1000, { a: 'opus\u001b[31m' })
 
     expect(rows[0]?.model).toBe('opus[31m')
+  })
+})
+
+describe('cleanModel', () => {
+  test('cuts a long model to 64 characters', async () => {
+    expect(cleanModel('x'.repeat(500))).toBe('x'.repeat(64))
+  })
+
+  test('cuts by code points, so an emoji at the limit is not split', async () => {
+    const cut = cleanModel('x'.repeat(63) + '😀😀')
+
+    expect(cut).toBe('x'.repeat(63) + '😀')
+    expect(Array.from(cut ?? '')).toHaveLength(64)
+  })
+
+  test('keeps 64 emoji whole when the model is all emoji', async () => {
+    expect(cleanModel('😀'.repeat(100))).toBe('😀'.repeat(64))
+  })
+
+  test('keeps a model of exactly 64 characters', async () => {
+    expect(cleanModel('x'.repeat(64))).toBe('x'.repeat(64))
+  })
+
+  test('trims the spaces left at the edges, also after the cut', async () => {
+    expect(cleanModel('  opus  ')).toBe('opus')
+    expect(cleanModel('x'.repeat(63) + ' tail')).toBe('x'.repeat(63))
+  })
+
+  test('leaves out what is not text or is empty', async () => {
+    expect(cleanModel(undefined)).toBeUndefined()
+    expect(cleanModel({})).toBeUndefined()
+    expect(cleanModel(' \u001b ')).toBeUndefined()
+  })
+})
+
+describe('staleModelIds', () => {
+  test('names the models of agents neither shown nor listed', async () => {
+    const models = { shown: 'opus', listed: 'haiku', gone: 'sonnet' }
+
+    expect(staleModelIds(models, [row({ id: 'shown' })], [info({ id: 'listed' })])).toEqual(['gone'])
+  })
+
+  test('names every model when nothing is shown or listed', async () => {
+    expect(staleModelIds({ a: 'opus' }, [], [])).toEqual(['a'])
+  })
+
+  test('names none when every agent is kept', async () => {
+    expect(staleModelIds({ a: 'opus', b: 'haiku' }, [row({ id: 'a' })], [info({ id: 'b' })])).toEqual([])
+  })
+})
+
+describe('withoutModels', () => {
+  test('keeps a model saved after the stale ids were found', async () => {
+    expect(withoutModels({ gone: 'sonnet', fresh: 'opus' }, ['gone'])).toEqual({ fresh: 'opus' })
+  })
+
+  test('does not change the map it receives', async () => {
+    const models = { a: 'opus', gone: 'haiku' }
+    withoutModels(models, ['gone'])
+
+    expect(models).toEqual({ a: 'opus', gone: 'haiku' })
   })
 })
 
@@ -170,6 +238,15 @@ describe('modelLabel', () => {
     expect(modelLabel('claude-opus-5-5')).toBe('opus 5.5')
     expect(modelLabel('claude-sonnet-4-5-20250929')).toBe('sonnet 4.5')
     expect(modelLabel('claude-haiku-5-5[1m]')).toBe('haiku 5.5')
+  })
+
+  test('shortens Bedrock, Vertex and older ids', async () => {
+    expect(modelLabel('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('sonnet 4.5')
+    expect(modelLabel('anthropic.claude-opus-5-5-v1')).toBe('opus 5.5')
+    expect(modelLabel('claude-sonnet-4-5@20250929')).toBe('sonnet 4.5')
+    expect(modelLabel('claude-3-5-sonnet-20241022')).toBe('sonnet 3.5')
+    expect(modelLabel('claude-3-5-sonnet-v2@20241022')).toBe('sonnet 3.5')
+    expect(modelLabel('anthropic.claude-3-5-sonnet-20241022-v2:0')).toBe('sonnet 3.5')
   })
 
   test('shows an alias or an unknown id as it is, without the prefix', async () => {

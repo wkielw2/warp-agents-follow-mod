@@ -117,6 +117,79 @@ describe('model', () => {
   })
 })
 
+describe('models map', () => {
+  test('drops the model of an agent no longer shown or listed', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    const list = [agent({ id: 'a', name: 'tester' })]
+    engineBeneath(on, list)
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+    const modelWrites: unknown[] = []
+    on('state.set', ($, e, next) => {
+      if (e.key === 'models') modelWrites.push(e.value)
+      return next(e)
+    })
+
+    await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+    await $.command.run(RUN_AGENTES)
+    // Without session.start no timer runs: /agentes ticks by hand.
+    list.length = 0
+    await clock.advance(1000)
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(6 * 60 * 1000)
+    await $.command.run(RUN_AGENTES)
+
+    expect(modelWrites).toEqual([{ a: 'claude-opus-5-5' }, {}])
+  })
+})
+
+describe('models map writes', () => {
+  const watchModelWrites = (on: On) => {
+    const writes: unknown[] = []
+    on('state.set', ($, e, next) => {
+      if (e.key === 'models') writes.push(e.value)
+      return next(e)
+    })
+
+    return writes
+  }
+
+  test('does not write the state when the spawned model is blank', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    on('agent.spawn', () => ({ model: ' \u001b ', agentId: 'a' }))
+    const writes = watchModelWrites(on)
+
+    await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+
+    expect(writes).toEqual([])
+  })
+
+  test('saves the spawned model clean and cut', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    on('agent.spawn', () => ({ model: 'opus\u001b' + 'x'.repeat(100), agentId: 'a' }))
+    const writes = watchModelWrites(on)
+
+    await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+
+    expect(writes).toEqual([{ a: 'opus' + 'x'.repeat(60) }])
+  })
+
+  test('does not prune while every saved model still belongs to an agent', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+    const writes = watchModelWrites(on)
+
+    await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(1000)
+    await $.command.run(RUN_AGENTES)
+
+    expect(writes).toEqual([{ a: 'claude-opus-5-5' }])
+  })
+})
+
 describe('tab title', () => {
   const TITLE = '\u001b]0;🤖 1 agente · tester\u0007'
   const processResult = (exitCode: number, stdout = '', isStdoutTruncated = false) => ({

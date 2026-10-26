@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
 import type { AgentRow, AgentRowStatus, AgentTreeLine } from '../types'
-import { buildAgentTree, formatElapsed, isActive, isLive, mergeAgents, modelLabel, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from './agents'
+import { buildAgentTree, cleanModel, formatElapsed, isActive, isLive, mergeAgents, modelLabel, staleModelIds, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs, withoutModels } from './agents'
 
 const PANE = 'agentes'
 const PANE_TITLE = 'Agentes'
@@ -98,6 +98,12 @@ async function tick($: EngineInterface): Promise<void> {
     const hasChanged = JSON.stringify(rows) !== JSON.stringify(previous)
 
     if (hasChanged) await update($, agents, () => rows)
+    const staleIds = staleModelIds(modelsById, rows, infos)
+    if (staleIds.length > 0) {
+      // Only the ids found stale here are dropped: a model a spawn saved
+      // meanwhile belongs to an agent this tick has not seen yet, and stays.
+      await update($, models, latest => withoutModels(latest, staleIds))
+    }
     if (hasChanged || rows.some(row => isLive(row.status))) await update($, now, () => time)
 
     const status = statusText(rows)
@@ -146,8 +152,11 @@ export const register: Register = on => {
     const spawned = await next(e)
     if (spawned.agentId === undefined) return spawned
 
-    const { agentId, model } = spawned
-    await update($, models, previous => ({ ...previous, [agentId]: model })).catch(() => undefined)
+    const { agentId } = spawned
+    const model = cleanModel(spawned.model)
+    if (model !== undefined) {
+      await update($, models, previous => ({ ...previous, [agentId]: model })).catch(() => undefined)
+    }
 
     if (!session.hasAutoOpened) {
       session.hasAutoOpened = true

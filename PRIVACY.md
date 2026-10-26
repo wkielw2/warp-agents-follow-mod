@@ -7,6 +7,7 @@ Política de privacidad del mod de Claude Code `agentes-activos`. Se aplica a to
 ## Qué datos lee
 
 - **La lista de agentes de la sesión** que le da Claude Code: nombre, tipo, descripción, estado y tiempos de cada subagente. Sirve para dibujar el panel, el contador de la barra de estado y el título de la pestaña.
+- **El modelo de IA con el que se lanza cada subagente** (por ejemplo `claude-opus-5-5`), que Claude Code devuelve al lanzarlo, porque la lista de agentes no lo trae. Solo se muestra en el panel y se descarta cuando el agente deja de verse en el panel y de aparecer en la lista de agentes.
 - **La lista de procesos del sistema, una vez por sesión**, con `ps -A -ww -o pid= -o ppid= -o tty= -o command=`. Incluye la línea de comando completa de cada proceso, que puede contener datos de otros programas. Solo sirve para encontrar el terminal de la sesión: el mod reconoce la fila de su propio `ps` y sube por los procesos padre hasta el primer terminal.
 
 ## Qué hace con ellos
