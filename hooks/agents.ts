@@ -76,6 +76,8 @@ const updateRow = (row: AgentRow, info: AgentInfo, now: number, models: ModelsBy
     endedAt,
     parentId: info.parentId,
     model: modelOf(info, models) ?? row.model,
+    // A dismissed agent that resumes is shown again.
+    isDismissed: endedAt === undefined ? undefined : row.isDismissed,
   }
 }
 
@@ -91,19 +93,27 @@ const newRow = (info: AgentInfo, now: number, models: ModelsById): AgentRow => (
   model: modelOf(info, models),
 })
 
-const pruneEnded = (rows: AgentRow[], now: number): AgentRow[] => {
+// An ended row out of the pane is dropped, or dismissed while the engine
+// still lists it: dropping that one would make the next tick add it as new.
+const pruneEnded = (rows: AgentRow[], now: number, listedIds: Set<string>): AgentRow[] => {
   const recentEnded = rows
-    .filter(row => row.endedAt !== undefined && now - row.endedAt <= KEEP_ENDED_MS)
+    .filter(row => row.endedAt !== undefined && !row.isDismissed && now - row.endedAt <= KEEP_ENDED_MS)
     .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
     .slice(0, MAX_ENDED_ROWS)
   const keptIds = new Set(recentEnded.map(row => row.id))
 
-  return rows.filter(row => row.endedAt === undefined || keptIds.has(row.id))
+  return rows.flatMap(row => {
+    if (row.endedAt === undefined || keptIds.has(row.id)) return [row]
+    if (listedIds.has(row.id)) return [row.isDismissed ? row : { ...row, isDismissed: true as const }]
+
+    return []
+  })
 }
 
 /**
  * Merges the engine's agent list into the rows the pane shows. Agents the
- * engine already dropped count as completed; ended ones stay a few minutes.
+ * engine already dropped count as completed; ended ones stay a few minutes,
+ * then are hidden (dismissed) until the engine drops them too.
  */
 export const mergeAgents = (
   rows: AgentRow[],
@@ -123,7 +133,7 @@ export const mergeAgents = (
   })
   const added = infos.filter(info => !knownIds.has(info.id)).map(info => newRow(info, now, models))
 
-  return pruneEnded([...updated, ...added], now)
+  return pruneEnded([...updated, ...added], now, new Set(infoById.keys()))
 }
 
 export const formatElapsed = (ms: number): string => {
@@ -262,10 +272,10 @@ type PsRow = { pid: number; ppid: number; tty: string; command: string }
 const parsePsRows = (psOutput: string): Map<number, PsRow> => {
   const rows = new Map<number, PsRow>()
   for (const line of psOutput.split('\n')) {
-    const match = PS_ROW.exec(line)
-    if (!match) continue
-    const pid = Number(match[1])
-    if (!rows.has(pid)) rows.set(pid, { pid, ppid: Number(match[2]), tty: match[3], command: match[4] })
+    const [, pidText, ppidText, tty, command] = PS_ROW.exec(line) ?? []
+    if (!pidText || !ppidText || !tty || !command) continue
+    const pid = Number(pidText)
+    if (!rows.has(pid)) rows.set(pid, { pid, ppid: Number(ppidText), tty, command })
   }
 
   return rows

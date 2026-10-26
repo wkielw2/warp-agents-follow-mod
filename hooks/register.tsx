@@ -180,7 +180,7 @@ export const register: Register = on => {
     const tree = buildAgentTree(rows)
     const inTree = new Set(tree.map(line => line.row.id))
     const ended = rows
-      .filter(row => !isLive(row.status) && !inTree.has(row.id))
+      .filter(row => !isLive(row.status) && !row.isDismissed && !inTree.has(row.id))
       .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
     const elapsedOf = (row: AgentRow) => formatElapsed((row.endedAt ?? time) - row.startedAt)
 

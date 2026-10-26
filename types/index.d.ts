@@ -12,6 +12,11 @@ export type AgentRow = {
   parentId?: string
   /** What the agent runs on, as `agent.spawn` resolved it; absent when it was not seen spawning. */
   model?: string
+  /**
+   * Ended and out of the pane (too old, or past the last ten) while the
+   * engine still lists it: kept hidden so the next tick does not add it again.
+   */
+  isDismissed?: true
 }
 
 /** One node of the agent tree, with the guides drawn before it. */

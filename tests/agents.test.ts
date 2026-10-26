@@ -139,6 +139,89 @@ describe('mergeAgents', () => {
   })
 })
 
+describe('mergeAgents with agents the engine keeps listing', () => {
+  test('does not bring back an ended agent once it left the pane', async () => {
+    const done = info({ id: 'a', status: 'completed' })
+    const shown = mergeAgents([], [done], 0)
+    const expired = mergeAgents(shown, [done], 5 * 60 * 1000 + 1)
+    const nextTick = mergeAgents(expired, [done], 5 * 60 * 1000 + 1001)
+
+    expect(nextTick.filter(one => !one.isDismissed)).toEqual([])
+  })
+
+  test('forgets a dismissed agent once the engine drops it', async () => {
+    const done = info({ id: 'a', status: 'completed' })
+    const expired = mergeAgents(mergeAgents([], [done], 0), [done], 5 * 60 * 1000 + 1)
+
+    expect(mergeAgents(expired, [], 5 * 60 * 1000 + 1001)).toEqual([])
+  })
+
+  test('shows a dismissed agent again when it resumes', async () => {
+    const done = info({ id: 'a', status: 'completed' })
+    const expired = mergeAgents(mergeAgents([], [done], 0), [done], 5 * 60 * 1000 + 1)
+    const resumed = mergeAgents(expired, [info({ id: 'a', status: 'running' })], 5 * 60 * 1000 + 1001)
+
+    expect(resumed.map(one => [one.status, one.isDismissed])).toEqual([['running', undefined]])
+  })
+})
+
+describe('mergeAgents past the last ten ended', () => {
+  const MINUTE = 60 * 1000
+  const endedAgents = (count: number) =>
+    Array.from({ length: count }, (_, index) => info({ id: `e${index}`, status: 'completed' }))
+  // Agent `e<n>` ended at n seconds, so a higher n is more recent.
+  const endedRows = (count: number) =>
+    endedAgents(count).map((one, index) => row({ id: one.id, status: 'completed', endedAt: index * 1000 }))
+  const dismissedIds = (rows: AgentRow[]) => rows.filter(one => one.isDismissed).map(one => one.id).sort()
+  const shownIds = (rows: AgentRow[]) => rows.filter(one => !one.isDismissed).map(one => one.id).sort()
+
+  test('dismisses the oldest ended agents beyond ten while the engine lists them', async () => {
+    const rows = mergeAgents(endedRows(12), endedAgents(12), 20 * 1000)
+
+    expect(dismissedIds(rows)).toEqual(['e0', 'e1'])
+    expect(shownIds(rows)).toHaveLength(10)
+  })
+
+  test('forgets the ones beyond ten the engine no longer lists', async () => {
+    const rows = mergeAgents(endedRows(12), endedAgents(12).slice(2), 20 * 1000)
+
+    expect(rows).toHaveLength(10)
+    expect(dismissedIds(rows)).toEqual([])
+  })
+
+  test('does not count dismissed agents toward the maximum of ten', async () => {
+    const first = mergeAgents(endedRows(12), endedAgents(12), 20 * 1000)
+    const again = mergeAgents(first, endedAgents(12), 21 * 1000)
+
+    expect(shownIds(again)).toHaveLength(10)
+    expect(dismissedIds(again)).toEqual(['e0', 'e1'])
+  })
+
+  test('dismisses one more when an eleventh ended agent arrives', async () => {
+    const first = mergeAgents(endedRows(10), endedAgents(10), 20 * 1000)
+    const withNew = [...endedAgents(10), info({ id: 'new', status: 'completed' })]
+    const next = mergeAgents(first, withNew, 21 * 1000)
+
+    expect(dismissedIds(next)).toEqual(['e0'])
+    expect(shownIds(next)).toContain('new')
+  })
+
+  test('dismissed agents expire from the list only when the engine drops them', async () => {
+    const dismissed = mergeAgents(endedRows(12), endedAgents(12), 20 * 1000)
+    const stillListed = mergeAgents(dismissed, endedAgents(12), 10 * MINUTE)
+
+    expect(stillListed).toHaveLength(12)
+    expect(stillListed.every(one => one.isDismissed)).toBe(true)
+    expect(mergeAgents(stillListed, [], 10 * MINUTE + 1000)).toEqual([])
+  })
+
+  test('keeps the data of an agent when it is dismissed', async () => {
+    const [kept] = mergeAgents([row({ id: 'a', label: 'tester', status: 'completed', endedAt: 0, startedAt: 7 })], [info({ id: 'a', name: 'tester', status: 'completed' })], 6 * MINUTE)
+
+    expect(kept).toMatchObject({ id: 'a', label: 'tester', startedAt: 7, endedAt: 0, isDismissed: true })
+  })
+})
+
 describe('mergeAgents with models', () => {
   test('adds the model the agent was spawned on', async () => {
     const rows = mergeAgents([], [info({ id: 'a' })], 1000, { a: 'claude-opus-5-5' })
@@ -346,6 +429,21 @@ describe('stripUnsafeChars', () => {
 
 describe('buildAgentTree', () => {
   const shape = (rows: AgentRow[]) => buildAgentTree(rows).map(line => `${line.guide}${line.row.id}`)
+
+  test('keeps a dismissed ancestor so a running descendant stays connected', async () => {
+    const rows = [
+      row({ id: 'root', status: 'completed', endedAt: 5, isDismissed: true }),
+      row({ id: 'child', parentId: 'root', startedAt: 1 }),
+    ]
+
+    expect(shape(rows)).toEqual(['root', '└─ child'])
+  })
+
+  test('leaves out a dismissed agent with no running descendants', async () => {
+    const rows = [row({ id: 'old', status: 'completed', endedAt: 5, isDismissed: true }), row({ id: 'live', startedAt: 1 })]
+
+    expect(shape(rows)).toEqual(['live'])
+  })
 
   test('nests agents under the agent that spawned them, oldest first', async () => {
     const rows = [

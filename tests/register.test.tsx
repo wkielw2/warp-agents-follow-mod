@@ -96,6 +96,74 @@ describe('Pane', () => {
   })
 })
 
+describe('Pane with dismissed agents', () => {
+  const MINUTE = 60 * 1000
+  const mountPane = ($: Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[0]) =>
+    $.ui.mount({ plugin: 'agentes-activos', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'agentes' })
+
+  test('does not draw an ended agent that left the pane while the engine still lists it', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'done', name: 'documentador', status: 'completed' })])
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(6 * MINUTE)
+    await $.command.run(RUN_AGENTES)
+
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: 'documentador' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: 'TERMINADOS' })).toBeUndefined()
+  })
+
+  test('counts only the ended agents still shown', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    const list = [agent({ id: 'old', name: 'antiguo', status: 'completed' })]
+    engineBeneath(on, list)
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(6 * MINUTE)
+    list.push(agent({ id: 'fresh', name: 'reciente', status: 'completed' }))
+    await $.command.run(RUN_AGENTES)
+
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: 'reciente' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'antiguo' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: '1 terminados' })).toBeDefined()
+  })
+
+  test('draws a dismissed agent again when it resumes', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    const list = [agent({ id: 'a', name: 'tester', status: 'completed' })]
+    engineBeneath(on, list)
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(6 * MINUTE)
+    await $.command.run(RUN_AGENTES)
+    list[0] = agent({ id: 'a', name: 'tester', status: 'running' })
+    await clock.advance(1000)
+    await $.command.run(RUN_AGENTES)
+
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: 'tester' })).toBeDefined()
+  })
+
+  test('keeps the branch of a running agent whose parent was dismissed', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    const list = [agent({ id: 'root', name: 'orquestador', status: 'completed' })]
+    engineBeneath(on, list)
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(6 * MINUTE)
+    list.push(agent({ id: 'child', name: 'tester', parentId: 'root' }))
+    await $.command.run(RUN_AGENTES)
+
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: 'orquestador' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '└─ ' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'tester' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'TERMINADOS' })).toBeUndefined()
+  })
+})
+
 describe('model', () => {
   test('shows the model each agent was spawned on', async ($, on) => {
     mock.clock(on, { now: 1000 })
@@ -236,7 +304,7 @@ describe('tab title', () => {
     return { calls, writes }
   }
 
-  const start = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
+  const start = ($: Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[0]) =>
     $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
   test('writes the running agents to the terminal found at start', async ($, on) => {
