@@ -45,24 +45,54 @@ export const cleanModel = (model: unknown): string | undefined => {
 const modelOf = (info: AgentInfo, models: ModelsById): string | undefined =>
   Object.hasOwn(models, info.id) ? cleanModel(models[info.id]) : undefined
 
+/** Tokens of each agent's last request to the model, by id, as `turn.step` reported them. */
+export type TokensById = Readonly<Record<string, number>>
+
+const cleanTokens = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= Number.MAX_SAFE_INTEGER
+    ? value
+    : undefined
+
+const USAGE_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
+
+/**
+ * Tokens of one request (input + cache + output) from the engine's usage.
+ * A field that is not a finite number ≥ 0 counts as 0; undefined when the
+ * total is not a usable count.
+ */
+export const stepTokens = (usage: unknown): number | undefined => {
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const fields = usage as Record<string, unknown>
+  const total = USAGE_FIELDS.reduce((sum, name) => {
+    const value = fields[name]
+
+    return sum + (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0)
+  }, 0)
+
+  return cleanTokens(Math.floor(total))
+}
+
+const tokensOf = (id: string, byId: TokensById): number | undefined =>
+  Object.hasOwn(byId, id) ? cleanTokens(byId[id]) : undefined
+
 /**
  * Ids in the map whose agent is neither shown in the pane nor listed any
  * more, so the map does not grow with every spawn of the session.
  */
-export const staleModelIds = (models: ModelsById, rows: AgentRow[], infos: AgentInfo[]): string[] => {
+export const staleIds = <T>(byId: Readonly<Record<string, T>>, rows: AgentRow[], infos: AgentInfo[]): string[] => {
   const keptIds = new Set([...rows.map(row => row.id), ...infos.map(info => info.id)])
 
-  return Object.keys(models).filter(id => !keptIds.has(id))
+  return Object.keys(byId).filter(id => !keptIds.has(id))
 }
 
 /** The map without the given ids; any other entry, a newer one included, stays. */
-export const withoutModels = (models: ModelsById, ids: readonly string[]): ModelsById => {
+export const withoutIds = <T>(byId: Readonly<Record<string, T>>, ids: readonly string[]): Readonly<Record<string, T>> => {
   const dropped = new Set(ids)
 
-  return Object.fromEntries(Object.entries(models).filter(([id]) => !dropped.has(id)))
+  return Object.fromEntries(Object.entries(byId).filter(([id]) => !dropped.has(id)))
 }
 
-const updateRow = (row: AgentRow, info: AgentInfo, now: number, models: ModelsById): AgentRow => {
+const updateRow = (row: AgentRow, info: AgentInfo, now: number, models: ModelsById, tokens: TokensById): AgentRow => {
   const isResumed = row.endedAt !== undefined && isActive(info.status)
   const endedAt = isEnded(info.status) ? (row.endedAt ?? now) : undefined
 
@@ -76,12 +106,13 @@ const updateRow = (row: AgentRow, info: AgentInfo, now: number, models: ModelsBy
     endedAt,
     parentId: info.parentId,
     model: modelOf(info, models) ?? row.model,
+    tokens: tokensOf(info.id, tokens) ?? row.tokens,
     // A dismissed agent that resumes is shown again.
     isDismissed: endedAt === undefined ? undefined : row.isDismissed,
   }
 }
 
-const newRow = (info: AgentInfo, now: number, models: ModelsById): AgentRow => ({
+const newRow = (info: AgentInfo, now: number, models: ModelsById, tokens: TokensById): AgentRow => ({
   id: info.id,
   label: labelOf(info),
   type: stripUnsafeChars(info.type),
@@ -91,6 +122,7 @@ const newRow = (info: AgentInfo, now: number, models: ModelsById): AgentRow => (
   endedAt: isEnded(info.status) ? now : undefined,
   parentId: info.parentId,
   model: modelOf(info, models),
+  tokens: tokensOf(info.id, tokens),
 })
 
 // An ended row out of the pane is dropped, or dismissed while the engine
@@ -120,18 +152,19 @@ export const mergeAgents = (
   infos: AgentInfo[],
   now: number,
   models: ModelsById = {},
+  tokens: TokensById = {},
 ): AgentRow[] => {
   const infoById = new Map(infos.map(info => [info.id, info]))
   const knownIds = new Set(rows.map(row => row.id))
 
   const updated = rows.map(row => {
     const info = infoById.get(row.id)
-    if (info) return updateRow(row, info, now, models)
+    if (info) return updateRow(row, info, now, models, tokens)
     if (row.endedAt !== undefined) return row
 
-    return { ...row, status: 'completed' as const, endedAt: now }
+    return { ...row, status: 'completed' as const, endedAt: now, tokens: tokensOf(row.id, tokens) ?? row.tokens }
   })
-  const added = infos.filter(info => !knownIds.has(info.id)).map(info => newRow(info, now, models))
+  const added = infos.filter(info => !knownIds.has(info.id)).map(info => newRow(info, now, models, tokens))
 
   return pruneEnded([...updated, ...added], now, new Set(infoById.keys()))
 }
@@ -148,6 +181,22 @@ export const formatElapsed = (ms: number): string => {
 
   return `${seconds}s`
 }
+
+/** Compact count for the pane, always truncated: `999 tok`, `12,3k tok`, `1,2M tok`. */
+export const formatTokens = (count: number): string => {
+  if (!Number.isFinite(count) || count < 1) return '0 tok'
+  const n = Math.floor(count)
+  if (n < 1000) return `${n} tok`
+  const [divisor, unit] = n < 1e6 ? [1000, 'k'] : [1e6, 'M']
+  if (n >= divisor * 100) return `${Math.floor(n / divisor)}${unit} tok`
+  const tenths = Math.floor(n / (divisor / 10))
+
+  return `${Math.floor(tenths / 10)},${tenths % 10}${unit} tok`
+}
+
+/** Right-hand text of a row: its tokens, if known, before the elapsed time. */
+export const metricsText = (elapsed: string, tokens?: number): string =>
+  tokens === undefined ? elapsed : `${formatTokens(tokens)} · ${elapsed}`
 
 // Bedrock spells a model `us.anthropic.claude-…-v1:0`, Vertex `claude-…@20250929`.
 const MODEL_PROVIDER_PREFIX = /^(?:[a-z]+\.)?anthropic\./

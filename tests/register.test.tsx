@@ -381,6 +381,206 @@ describe('models map writes', () => {
   })
 })
 
+describe('tokens', () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const STEP = { turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 1 } as const
+
+  const usageOf = (total: number) => ({
+    input_tokens: total - 300,
+    output_tokens: 100,
+    cache_read_input_tokens: 150,
+    cache_creation_input_tokens: 50,
+    model: 'claude-opus-5-5',
+  })
+
+  const stepAnswer = (usage: ReturnType<typeof usageOf> | null) => ({
+    turnId: 't1',
+    index: 0,
+    answer: '',
+    toolUses: [],
+    stopReason: 'end_turn' as const,
+    usage,
+  })
+
+  // The engine beneath: streams one text chunk, then answers with `usages` in turn.
+  const stepBeneath = (on: On, ...usages: (ReturnType<typeof usageOf> | null)[]) => {
+    let call = 0
+    on('turn.step', async function* () {
+      yield { kind: 'text' as const, index: 0, text: 'hola' }
+
+      return stepAnswer(usages[Math.min(call++, usages.length - 1)] ?? null)
+    })
+  }
+
+  const watchTokenWrites = (on: On) => {
+    const writes: unknown[] = []
+    on('state.set', ($, e, next) => {
+      if (e.key === 'tokens') writes.push(e.value)
+      return next(e)
+    })
+
+    return writes
+  }
+
+  const runStep = async ($: Parameters<Parameters<typeof test>[1]>[0], agentId?: string) => {
+    const stream = $.turn.step({ ...STEP, ...(agentId === undefined ? {} : { agentId }) })
+    const chunks: unknown[] = []
+    let step = await stream.next()
+    while (!step.done) {
+      chunks.push(step.value)
+      step = await stream.next()
+    }
+    const result = step.value
+    await settle()
+
+    return { chunks, result }
+  }
+
+  const mountPane = ($: Parameters<Parameters<typeof test>[1]>[0], props = PANE_PROPS) =>
+    $.ui.mount({ plugin: 'agentes-activos', surface: 'terminal', component: 'Pane', props, requestId: 'agentes' })
+
+  test('shows the tokens of the last request next to the time', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    stepBeneath(on, usageOf(12345))
+
+    await runStep($, 'a')
+    await $.command.run(RUN_AGENTES)
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: '12,3k tok · 0s' })).toBeDefined()
+  })
+
+  test('shows the last request, not the sum', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    stepBeneath(on, usageOf(1000), usageOf(2500))
+
+    await runStep($, 'a')
+    await runStep($, 'a')
+    await $.command.run(RUN_AGENTES)
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: '2,5k tok' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '3,5k tok' })).toBeUndefined()
+  })
+
+  test('lets the chunks and the result through untouched', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [])
+    stepBeneath(on, usageOf(1000))
+
+    const { chunks, result } = await runStep($, 'a')
+
+    expect(chunks).toEqual([{ kind: 'text', index: 0, text: 'hola' }])
+    expect(result).toEqual(stepAnswer(usageOf(1000)))
+  })
+
+  test('does not write the tokens of the main loop', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [])
+    stepBeneath(on, usageOf(1000))
+    const writes = watchTokenWrites(on)
+
+    await runStep($)
+
+    expect(writes).toEqual([])
+  })
+
+  test('does not write when the response carried no usage', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [])
+    stepBeneath(on, null)
+    const writes = watchTokenWrites(on)
+
+    await runStep($, 'a')
+
+    expect(writes).toEqual([])
+  })
+
+  test('shows the tokens of an ended agent', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester', status: 'completed' })])
+    stepBeneath(on, usageOf(12345))
+
+    await runStep($, 'a')
+    await $.command.run(RUN_AGENTES)
+    const pane = await mountPane($)
+
+    expect(await pane.find({ type: 'Text', text: 'TERMINADOS' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '12,3k tok' })).toBeDefined()
+  })
+
+  test('drops the tokens of an agent no longer shown or listed', async ($, on) => {
+    const clock = mock.clock(on, { now: 1000 })
+    const list = [agent({ id: 'a', name: 'tester' })]
+    engineBeneath(on, list)
+    stepBeneath(on, usageOf(12345))
+    const writes = watchTokenWrites(on)
+
+    await runStep($, 'a')
+    await $.command.run(RUN_AGENTES)
+    list.length = 0
+    await clock.advance(1000)
+    await $.command.run(RUN_AGENTES)
+    await clock.advance(6 * 60 * 1000)
+    await $.command.run(RUN_AGENTES)
+
+    expect(writes).toEqual([{ a: 12345 }, {}])
+  })
+
+  test('returns the result even when saving the tokens fails', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [])
+    stepBeneath(on, usageOf(1000))
+    on('state.set', ($, e, next) => {
+      if (e.key === 'tokens') throw new Error('state down')
+      return next(e)
+    })
+
+    const { result } = await runStep($, 'a')
+
+    expect(result).toEqual(stepAnswer(usageOf(1000)))
+  })
+
+  test('keeps the second request when the first one saves slowly', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    stepBeneath(on, usageOf(1000), usageOf(2500))
+    const writes: unknown[] = []
+    let isFirst = true
+    on('state.set', async ($, e, next) => {
+      if (e.key !== 'tokens') return next(e)
+      if (isFirst) {
+        isFirst = false
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+      writes.push(e.value)
+      return next(e)
+    })
+
+    await runStep($, 'a')
+    await runStep($, 'a')
+    await $.command.run(RUN_AGENTES)
+    const pane = await mountPane($)
+
+    expect(writes).toEqual([{ a: 1000 }, { a: 2500 }])
+    expect(await pane.find({ type: 'Text', text: '2,5k tok' })).toBeDefined()
+  })
+
+  test('keeps the metrics whole when a long label is cut', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'x'.repeat(200) })])
+    stepBeneath(on, usageOf(12345))
+
+    await runStep($, 'a')
+    await $.command.run(RUN_AGENTES)
+    const pane = await mountPane($, { ...PANE_PROPS, bodyColumns: 30 })
+
+    expect(await pane.find({ type: 'Text', text: 'tok · ' })).toBeDefined()
+  })
+})
+
 describe('tab title', () => {
   const TITLE = '\u001b]0;🤖 1 agente · tester\u0007'
   const processResult = (exitCode: number, stdout = '', isStdoutTruncated = false) => ({

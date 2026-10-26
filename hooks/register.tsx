@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
 import type { AgentRow, AgentRowStatus, AgentTreeLine } from '../types'
-import { buildAgentTree, cleanModel, formatElapsed, isActive, isLive, mergeAgents, modelLabel, staleModelIds, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs, withoutModels } from './agents'
+import { buildAgentTree, cleanModel, formatElapsed, isActive, isLive, mergeAgents, metricsText, modelLabel, stepTokens, staleIds, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs, withoutIds } from './agents'
 
 const PANE = 'agentes'
 const PANE_TITLE = 'Agentes'
@@ -20,6 +20,8 @@ const agents = atom({ plugin: 'agentes-activos', key: 'agents' } as const, [])
 const now = atom({ plugin: 'agentes-activos', key: 'now' } as const, 0)
 // `$.agent.list()` does not say the model, so it is kept from each spawn.
 const models = atom({ plugin: 'agentes-activos', key: 'models' } as const, {})
+// `$.agent.list()` does not say what each agent consumes; each request of its loop (`turn.step`) leaves its count here.
+const tokens = atom({ plugin: 'agentes-activos', key: 'tokens' } as const, {})
 // Kept in the session's state, not the module, so a reload does not reopen a pane the person closed.
 const hasAutoOpened = atom({ plugin: 'agentes-activos', key: 'hasAutoOpened' } as const, false)
 
@@ -85,25 +87,37 @@ async function syncTitle($: EngineInterface, rows: AgentRow[]): Promise<void> {
   session.ticksSinceTitle = 0
 }
 
+// Replaces, not adds: the pane shows the last request, which is what fills the context.
+async function saveTokens($: EngineInterface, agentId: string, usage: unknown): Promise<void> {
+  const count = stepTokens(usage)
+  if (count === undefined) return
+  await update($, tokens, previous => ({ ...previous, [agentId]: count }))
+}
+
 async function tick($: EngineInterface): Promise<void> {
   if (session.isTicking) return
   session.isTicking = true
   try {
-    const [previous, infos, time, modelsById] = await Promise.all([
+    const [previous, infos, time, modelsById, tokensById] = await Promise.all([
       read($, agents),
       $.agent.list(),
       $.clock.now(),
       read($, models),
+      read($, tokens),
     ])
-    const rows = mergeAgents(previous, infos, time, modelsById)
+    const rows = mergeAgents(previous, infos, time, modelsById, tokensById)
     const hasChanged = JSON.stringify(rows) !== JSON.stringify(previous)
 
     if (hasChanged) await update($, agents, () => rows)
-    const staleIds = staleModelIds(modelsById, rows, infos)
-    if (staleIds.length > 0) {
+    const obsoleteModelIds = staleIds(modelsById, rows, infos)
+    if (obsoleteModelIds.length > 0) {
       // Only the ids found stale here are dropped: a model a spawn saved
       // meanwhile belongs to an agent this tick has not seen yet, and stays.
-      await update($, models, latest => withoutModels(latest, staleIds))
+      await update($, models, latest => withoutIds(latest, obsoleteModelIds))
+    }
+    const obsoleteTokenIds = staleIds(tokensById, rows, infos)
+    if (obsoleteTokenIds.length > 0) {
+      await update($, tokens, latest => withoutIds(latest, obsoleteTokenIds))
     }
     if (hasChanged || rows.some(row => isLive(row.status))) await update($, now, () => time)
 
@@ -182,6 +196,14 @@ export const register: Register = on => {
     return spawned
   }).catch(($, e, next) => next(e)) // never block a spawn because the panel failed
 
+  // Awaited, so a slow write of an earlier request cannot overwrite the next one's count.
+  on('turn.step', async function* ($, e, next) {
+    const response = yield* next(e)
+    if (e.agentId !== undefined) await saveTokens($, e.agentId, response.usage).catch(() => undefined)
+
+    return response
+  })
+
   on('session.end', async ($, e, next) => {
     if (session.lastTitle !== undefined) await writeTitle($, IDLE_TAB_TITLE).catch(() => undefined)
 
@@ -228,10 +250,12 @@ export const register: Register = on => {
               ) : null}
               {style.word && <Text color={style.color}> · {style.word}</Text>}
             </Box>
-            <Text tabular color={isRowActive ? 'claude' : undefined} dimColor={!isRowActive}>
-              {' '}
-              {elapsedOf(row)}
-            </Text>
+            <Box flexShrink={0}>
+              <Text tabular color={isRowActive ? 'claude' : undefined} dimColor={!isRowActive}>
+                {' '}
+                {metricsText(elapsedOf(row), row.tokens)}
+              </Text>
+            </Box>
           </Box>
           {description !== '' && (
             <Box flexDirection="row">
@@ -260,7 +284,9 @@ export const register: Register = on => {
               {description ? ` · ${description}` : ''}
             </Text>
           </Box>
-          <Text tabular dimColor> {elapsedOf(row)}</Text>
+          <Box flexShrink={0}>
+            <Text tabular dimColor> {metricsText(elapsedOf(row), row.tokens)}</Text>
+          </Box>
         </Box>
       )
     }

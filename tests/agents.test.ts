@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { AgentInfo } from 'claude-code'
 
-import { buildAgentTree, cleanModel, formatElapsed, mergeAgents, modelLabel, staleModelIds, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs, withoutModels } from '../hooks/agents'
+import { buildAgentTree, cleanModel, formatElapsed, formatTokens, mergeAgents, metricsText, modelLabel, staleIds, statusText, stepTokens, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs, withoutIds } from '../hooks/agents'
 import type { AgentRow } from '../types'
 
 const info = (overrides: Partial<AgentInfo> & Pick<AgentInfo, 'id'>): AgentInfo => ({
@@ -255,6 +255,112 @@ describe('mergeAgents with models', () => {
   })
 })
 
+describe('stepTokens', () => {
+  test('adds input, output and cache tokens', async () => {
+    const usage = { input_tokens: 10, output_tokens: 200, cache_read_input_tokens: 12000, cache_creation_input_tokens: 135 }
+
+    expect(stepTokens(usage)).toBe(12345)
+  })
+
+  test('leaves out what is not an object', async () => {
+    expect(stepTokens(null)).toBeUndefined()
+    expect(stepTokens(undefined)).toBeUndefined()
+    expect(stepTokens('12')).toBeUndefined()
+  })
+
+  test('leaves out a total of zero', async () => {
+    expect(stepTokens({ input_tokens: 0, output_tokens: 0 })).toBeUndefined()
+    expect(stepTokens({})).toBeUndefined()
+  })
+
+  test('counts 0 for a field that is NaN, negative, infinite or text', async () => {
+    const usage = { input_tokens: Number.NaN, output_tokens: -5, cache_read_input_tokens: Infinity, cache_creation_input_tokens: '9' }
+
+    expect(stepTokens(usage)).toBeUndefined()
+    expect(stepTokens({ ...usage, input_tokens: 7 })).toBe(7)
+  })
+
+  test('leaves out a total past the safe integer limit', async () => {
+    expect(stepTokens({ input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 10 })).toBeUndefined()
+  })
+})
+
+describe('mergeAgents with tokens', () => {
+  test('adds the tokens to a new row', async () => {
+    const rows = mergeAgents([], [info({ id: 'a' })], 1000, {}, { a: 500 })
+
+    expect(rows[0]?.tokens).toBe(500)
+  })
+
+  test('replaces them with the latest ones', async () => {
+    const rows = mergeAgents([row({ id: 'a', tokens: 500 })], [info({ id: 'a' })], 1000, {}, { a: 900 })
+
+    expect(rows[0]?.tokens).toBe(900)
+  })
+
+  test('keeps the known ones when the map no longer has them', async () => {
+    const rows = mergeAgents([row({ id: 'a', tokens: 500 })], [info({ id: 'a' })], 1000, {}, {})
+
+    expect(rows[0]?.tokens).toBe(500)
+  })
+
+  test('an active row the engine stopped listing completes with the tokens of the map', async () => {
+    const rows = mergeAgents([row({ id: 'a', tokens: 500 })], [], 1000, {}, { a: 900 })
+
+    expect(rows[0]).toMatchObject({ status: 'completed', endedAt: 1000, tokens: 900 })
+  })
+
+  test('an active row the engine stopped listing keeps its last figure without the map', async () => {
+    const rows = mergeAgents([row({ id: 'a', tokens: 500 })], [], 1000)
+
+    expect(rows[0]).toMatchObject({ status: 'completed', tokens: 500 })
+  })
+
+  test('ignores 0, negatives, decimals, text and an inherited property', async () => {
+    const bad = { a: 0, b: -3, c: 1.5, d: '12', e: Number.NaN } as unknown as Record<string, number>
+    const ids = ['a', 'b', 'c', 'd', 'e', 'toString']
+    const rows = mergeAgents([], ids.map(id => info({ id })), 1000, {}, bad)
+
+    expect(rows.map(one => one.tokens)).toEqual(ids.map(() => undefined))
+  })
+
+  test('leaves the tokens out without a map', async () => {
+    expect(mergeAgents([], [info({ id: 'a' })], 1000)[0]?.tokens).toBeUndefined()
+  })
+})
+
+describe('formatTokens', () => {
+  const table: [number, string][] = [
+    [999, '999 tok'],
+    [1000, '1,0k tok'],
+    [12345, '12,3k tok'],
+    [99999, '99,9k tok'],
+    [100000, '100k tok'],
+    [999999, '999k tok'],
+    [1000000, '1,0M tok'],
+    [1234567, '1,2M tok'],
+    [123456789, '123M tok'],
+    [Number.NaN, '0 tok'],
+    [-5, '0 tok'],
+  ]
+
+  for (const [count, expected] of table) {
+    test(`${count} is ${expected}`, async () => {
+      expect(formatTokens(count)).toBe(expected)
+    })
+  }
+})
+
+describe('metricsText', () => {
+  test('is the elapsed time alone without tokens', async () => {
+    expect(metricsText('1m 05s')).toBe('1m 05s')
+  })
+
+  test('puts the tokens before the elapsed time', async () => {
+    expect(metricsText('1m 05s', 12345)).toBe('12,3k tok · 1m 05s')
+  })
+})
+
 describe('cleanModel', () => {
   test('cuts a long model to 64 characters', async () => {
     expect(cleanModel('x'.repeat(500))).toBe('x'.repeat(64))
@@ -287,30 +393,35 @@ describe('cleanModel', () => {
   })
 })
 
-describe('staleModelIds', () => {
+describe('staleIds', () => {
+  test('works on a map of numbers too', async () => {
+    expect(staleIds({ shown: 5, gone: 9 }, [row({ id: 'shown' })], [])).toEqual(['gone'])
+  })
+
+
   test('names the models of agents neither shown nor listed', async () => {
     const models = { shown: 'opus', listed: 'haiku', gone: 'sonnet' }
 
-    expect(staleModelIds(models, [row({ id: 'shown' })], [info({ id: 'listed' })])).toEqual(['gone'])
+    expect(staleIds(models, [row({ id: 'shown' })], [info({ id: 'listed' })])).toEqual(['gone'])
   })
 
   test('names every model when nothing is shown or listed', async () => {
-    expect(staleModelIds({ a: 'opus' }, [], [])).toEqual(['a'])
+    expect(staleIds({ a: 'opus' }, [], [])).toEqual(['a'])
   })
 
   test('names none when every agent is kept', async () => {
-    expect(staleModelIds({ a: 'opus', b: 'haiku' }, [row({ id: 'a' })], [info({ id: 'b' })])).toEqual([])
+    expect(staleIds({ a: 'opus', b: 'haiku' }, [row({ id: 'a' })], [info({ id: 'b' })])).toEqual([])
   })
 })
 
-describe('withoutModels', () => {
+describe('withoutIds', () => {
   test('keeps a model saved after the stale ids were found', async () => {
-    expect(withoutModels({ gone: 'sonnet', fresh: 'opus' }, ['gone'])).toEqual({ fresh: 'opus' })
+    expect(withoutIds({ gone: 'sonnet', fresh: 'opus' }, ['gone'])).toEqual({ fresh: 'opus' })
   })
 
   test('does not change the map it receives', async () => {
     const models = { a: 'opus', gone: 'haiku' }
-    withoutModels(models, ['gone'])
+    withoutIds(models, ['gone'])
 
     expect(models).toEqual({ a: 'opus', gone: 'haiku' })
   })

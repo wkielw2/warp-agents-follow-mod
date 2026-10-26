@@ -6,7 +6,7 @@ Mod de Claude Code que muestra los subagentes en ejecución mientras trabajas: u
 
 ## Qué hace
 
-- **Panel «Agentes»**: árbol en vivo de los subagentes por quién lanzó a quién, con estado, modelo abreviado (`opus 5.5`, `sonnet 3.5`, `haiku`…; también entiende los ids de Bedrock y Vertex), tiempo y descripción. El modelo se toma al lanzarse cada agente, así que no aparece en los que ya corrían cuando se cargó el mod. Los terminados se quedan 5 minutos (como mucho los 10 últimos) en la sección «Terminados»; un agente terminado con algún hijo aún en ejecución sigue en el árbol, atenuado. Al salir de «Terminados», si el motor aún lo lista, el agente queda oculto (en memoria, sin guardar nada) para que no reaparezca; se olvida cuando el motor lo suelta y vuelve a mostrarse si se reanuda.
+- **Panel «Agentes»**: árbol en vivo de los subagentes por quién lanzó a quién, con estado, modelo abreviado (`opus 5.5`, `sonnet 3.5`, `haiku`…; también entiende los ids de Bedrock y Vertex), tokens de su última petición al modelo (`12,3k tok`: entrada, caché y salida, el mismo criterio que la línea final de Claude Code), junto al tiempo, y descripción. El modelo se toma al lanzarse cada agente, así que no aparece en los que ya corrían cuando se cargó el mod. Los tokens aparecen tras la primera respuesta del modelo al agente; en los que ya corrían al cargarse el mod, desde su siguiente petición. Los teammates que corren en su propio panel de terminal no los tienen. Los terminados se quedan 5 minutos (como mucho los 10 últimos) en la sección «Terminados»; un agente terminado con algún hijo aún en ejecución sigue en el árbol, atenuado. Al salir de «Terminados», si el motor aún lo lista, el agente queda oculto (en memoria, sin guardar nada) para que no reaparezca; se olvida cuando el motor lo suelta y vuelve a mostrarse si se reanuda.
   - Se abre solo al empezar cada sesión interactiva si la terminal tiene 144 columnas o más. Si es más estrecha, Claude Code lo deja en espera hasta que la ensanches o lo abras con `/agentes`. Si lo cierras, no vuelve a abrirse solo al lanzar un agente ni al recargarse el plugin. En sesiones no interactivas se abre al lanzar el primer agente.
   - En cualquier momento: `/agentes`.
 - **Barra de estado**: `🤖 N agentes en ejecución` mientras haya alguno activo.
@@ -21,11 +21,11 @@ claude plugin install agentes-activos@agentes-activos
 
 Para probar una copia local sin instalarla: `claude --plugin-dir .` desde la raíz del repositorio.
 
-Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API en acceso anticipado que puede cambiar entre versiones.
+Necesita Claude Code 2.1.310 o posterior: es un mod de *function hooks*, una API en acceso anticipado que puede cambiar entre versiones.
 
 ## Qué ejecuta y qué datos usa
 
-- **Solo lee la lista de agentes de la sesión** que le da Claude Code. No guarda nada en disco y no hace ninguna llamada de red.
+- **Solo lee la lista de agentes de la sesión y el recuento de tokens de las respuestas del modelo a cada subagente** que le da Claude Code. No guarda nada en disco y no hace ninguna llamada de red.
 - **Para el título de la pestaña ejecuta dos comandos con argumentos fijos, sin `sh` ni ningún otro shell; los dos se ven en `hooks/register.tsx`:**
   - `ps -A -ww -o pid= -o ppid= -o tty= -o command=`, una vez al empezar la sesión: localiza su propia fila en la lista de procesos y sube por los padres hasta el primer terminal (`/dev/ttys…` o `/dev/pts/…`).
     - **Qué lee:** el pid, el proceso padre, el terminal y la línea de comando completa de todos los procesos del sistema, incluidos los de otros programas y usuarios con sus argumentos.
@@ -37,6 +37,7 @@ Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API
 - Claude Code puede cambiar el título por su cuenta; el mod lo vuelve a escribir cada 10 s mientras hay agentes.
 - Los nombres, descripciones y modelos de los agentes se limpian de caracteres de control e invisibles antes de mostrarse o de escribirse en el título.
 - El modelo se guarda ya limpio y recortado a 64 caracteres; si no es texto o queda vacío, no se guarda. Cada segundo se descartan los modelos de los agentes que ya no están en el panel ni en la lista, para que el mapa no crezca durante la sesión.
+- El recuento de tokens se guarda como número entero validado; si no lo es, no se guarda. Se descarta igual que el modelo.
 
 ## Eventos que engancha
 
@@ -45,6 +46,7 @@ Todos están en `hooks/register.tsx`. Ninguno cambia lo que pasa por el evento: 
 - **`session.start`**: deja que la sesión arranque primero, registra el comando `/agentes`, busca una vez el terminal para el título (el `ps` de arriba), pone un reloj que cada segundo lee la lista de agentes y, si la sesión es interactiva, abre el panel.
 - **`command.run` de `/agentes`**: solo responde a su propio comando; abre el panel y lo actualiza.
 - **`agent.spawn`**: deja que Claude Code lance el agente sin tocar su petición ni su resultado y, después, guarda el modelo con el que se lanzó, abre el panel si no se abrió al empezar y lo actualiza. Si el panel falla, el lanzamiento del agente sigue igual.
+- **`turn.step`**: deja pasar cada petición al modelo y su respuesta sin leer ni cambiar su contenido; al terminar la respuesta, si es de un subagente, guarda su recuento de tokens (espera a guardarlo, unos milisegundos, para que la cifra no quede desordenada); las del bucle principal se ignoran; si el guardado falla, la respuesta sigue igual.
 - **`session.end`**: si había puesto un título, lo vuelve a dejar en «Claude Code».
 - **`ui.render` del panel `agentes`**: dibuja solo su propio panel.
 
@@ -62,8 +64,8 @@ claude plugin validate . --strict
 claude plugin test .
 ```
 
-- `hooks/agents.ts`: lógica pura (árbol, tiempos, nombre corto del modelo, saneado y poda del modelo, poda de terminados y agentes ocultos, saneado de texto, búsqueda del terminal en la salida de `ps` y secuencia del título). Tests en `tests/agents.test.ts`.
-- `hooks/register.tsx`: engancha los eventos y dibuja el panel. Tests en `tests/register.test.tsx`, que simulan el motor con hooks por debajo del plugin (`agent.list`, `ui.open`, `ui.status` y `process.run` para el título).
+- `hooks/agents.ts`: lógica pura (árbol, tiempos, nombre corto del modelo, tokens (recuento y formato compacto), saneado y poda del modelo, poda de terminados y agentes ocultos, saneado de texto, búsqueda del terminal en la salida de `ps` y secuencia del título). Tests en `tests/agents.test.ts`.
+- `hooks/register.tsx`: engancha los eventos y dibuja el panel. Tests en `tests/register.test.tsx`, que simulan el motor con hooks por debajo del plugin (`agent.list`, `ui.open`, `ui.status`, `process.run` para el título y `turn.step`).
 
 ## Privacidad
 

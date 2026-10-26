@@ -12,6 +12,8 @@ export type AgentRow = {
   parentId?: string
   /** What the agent runs on, as `agent.spawn` resolved it; absent when it was not seen spawning. */
   model?: string
+  /** Tokens of the last request to the model of its loop (input + cache + output), per `turn.step`; absent until its first reply. */
+  tokens?: number
   /**
    * Ended and out of the pane (too old, or past the last ten) while the
    * engine still lists it: kept hidden so the next tick does not add it again.
@@ -30,6 +32,6 @@ export type AgentTreeLine = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agentes-activos': { agents: AgentRow[]; now: number; models: Record<string, string>; hasAutoOpened: boolean }
+    'agentes-activos': { agents: AgentRow[]; now: number; models: Record<string, string>; tokens: Record<string, number>; hasAutoOpened: boolean }
   }
 }
