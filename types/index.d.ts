@@ -10,6 +10,8 @@ export type AgentRow = {
   endedAt?: number
   /** The agent that spawned this one; absent when the main conversation did. */
   parentId?: string
+  /** What the agent runs on, as `agent.spawn` resolved it; absent when it was not seen spawning. */
+  model?: string
 }
 
 /** One node of the agent tree, with the guides drawn before it. */
@@ -23,6 +25,6 @@ export type AgentTreeLine = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agentes-activos': { agents: AgentRow[]; now: number }
+    'agentes-activos': { agents: AgentRow[]; now: number; models: Record<string, string> }
   }
 }

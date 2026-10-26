@@ -24,7 +24,16 @@ export const stripUnsafeChars = (text: string): string => text.replace(UNSAFE_CH
 
 const labelOf = (info: AgentInfo): string => stripUnsafeChars(info.name ?? info.type)
 
-const updateRow = (row: AgentRow, info: AgentInfo, now: number): AgentRow => {
+/** Model of each agent by id, as `agent.spawn` resolved it. */
+export type ModelsById = Readonly<Record<string, string>>
+
+const modelOf = (info: AgentInfo, models: ModelsById): string | undefined => {
+  const model = models[info.id]
+
+  return model === undefined ? undefined : stripUnsafeChars(model)
+}
+
+const updateRow = (row: AgentRow, info: AgentInfo, now: number, models: ModelsById): AgentRow => {
   const isResumed = row.endedAt !== undefined && isActive(info.status)
   const endedAt = isEnded(info.status) ? (row.endedAt ?? now) : undefined
 
@@ -37,10 +46,11 @@ const updateRow = (row: AgentRow, info: AgentInfo, now: number): AgentRow => {
     startedAt: isResumed ? now : row.startedAt,
     endedAt,
     parentId: info.parentId,
+    model: modelOf(info, models) ?? row.model,
   }
 }
 
-const newRow = (info: AgentInfo, now: number): AgentRow => ({
+const newRow = (info: AgentInfo, now: number, models: ModelsById): AgentRow => ({
   id: info.id,
   label: labelOf(info),
   type: stripUnsafeChars(info.type),
@@ -49,6 +59,7 @@ const newRow = (info: AgentInfo, now: number): AgentRow => ({
   startedAt: now,
   endedAt: isEnded(info.status) ? now : undefined,
   parentId: info.parentId,
+  model: modelOf(info, models),
 })
 
 const pruneEnded = (rows: AgentRow[], now: number): AgentRow[] => {
@@ -65,18 +76,23 @@ const pruneEnded = (rows: AgentRow[], now: number): AgentRow[] => {
  * Merges the engine's agent list into the rows the pane shows. Agents the
  * engine already dropped count as completed; ended ones stay a few minutes.
  */
-export const mergeAgents = (rows: AgentRow[], infos: AgentInfo[], now: number): AgentRow[] => {
+export const mergeAgents = (
+  rows: AgentRow[],
+  infos: AgentInfo[],
+  now: number,
+  models: ModelsById = {},
+): AgentRow[] => {
   const infoById = new Map(infos.map(info => [info.id, info]))
   const knownIds = new Set(rows.map(row => row.id))
 
   const updated = rows.map(row => {
     const info = infoById.get(row.id)
-    if (info) return updateRow(row, info, now)
+    if (info) return updateRow(row, info, now, models)
     if (row.endedAt !== undefined) return row
 
     return { ...row, status: 'completed' as const, endedAt: now }
   })
-  const added = infos.filter(info => !knownIds.has(info.id)).map(info => newRow(info, now))
+  const added = infos.filter(info => !knownIds.has(info.id)).map(info => newRow(info, now, models))
 
   return pruneEnded([...updated, ...added], now)
 }
@@ -92,6 +108,27 @@ export const formatElapsed = (ms: number): string => {
   if (minutes > 0) return `${minutes}m ${pad(seconds)}s`
 
   return `${seconds}s`
+}
+
+const MODEL_DATE_SUFFIX = /-\d{8}$/
+const MODEL_CONTEXT_SUFFIX = /\[[^\]]*\]$/
+const MODEL_FAMILY_VERSION = /^([a-z]+)-(\d+(?:-\d+)*)$/
+
+/**
+ * Short model name for the pane: `claude-opus-5-5` → `opus 5.5`,
+ * `claude-sonnet-4-5-20250929` → `sonnet 4.5`; an alias (`haiku`) or an
+ * unknown id is shown as it is, without the `claude-` prefix.
+ */
+export const modelLabel = (model: string): string => {
+  const id = stripUnsafeChars(model)
+    .trim()
+    .toLowerCase()
+    .replace(MODEL_CONTEXT_SUFFIX, '')
+    .replace(/^claude-/, '')
+    .replace(MODEL_DATE_SUFFIX, '')
+  const [, family, version] = MODEL_FAMILY_VERSION.exec(id) ?? []
+
+  return family && version ? `${family} ${version.replaceAll('-', '.')}` : id
 }
 
 const countLabel = (count: number): string => (count === 1 ? '1 agente' : `${count} agentes`)

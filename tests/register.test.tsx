@@ -96,6 +96,27 @@ describe('Pane', () => {
   })
 })
 
+describe('model', () => {
+  test('shows the model each agent was spawned on', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    engineBeneath(on, [agent({ id: 'a', name: 'tester' })])
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+
+    await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+    await $.command.run(RUN_AGENTES)
+
+    const pane = await $.ui.mount({
+      plugin: 'agentes-activos',
+      surface: 'terminal',
+      component: 'Pane',
+      props: PANE_PROPS,
+      requestId: 'agentes',
+    })
+
+    expect(await pane.find({ type: 'Text', text: 'opus 5.5' })).toBeDefined()
+  })
+})
+
 describe('tab title', () => {
   const TITLE = '\u001b]0;🤖 1 agente · tester\u0007'
   const processResult = (exitCode: number, stdout = '', isStdoutTruncated = false) => ({

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { AgentInfo } from 'claude-code'
 
-import { buildAgentTree, formatElapsed, mergeAgents, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from '../hooks/agents'
+import { buildAgentTree, formatElapsed, mergeAgents, modelLabel, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from '../hooks/agents'
 import type { AgentRow } from '../types'
 
 const info = (overrides: Partial<AgentInfo> & Pick<AgentInfo, 'id'>): AgentInfo => ({
@@ -136,6 +136,46 @@ describe('mergeAgents', () => {
 
     expect(rows[0]?.label).toBe('explorador')
     expect(rows[0]?.parentId).toBe('p2')
+  })
+})
+
+describe('mergeAgents with models', () => {
+  test('adds the model the agent was spawned on', async () => {
+    const rows = mergeAgents([], [info({ id: 'a' })], 1000, { a: 'claude-opus-5-5' })
+
+    expect(rows[0]?.model).toBe('claude-opus-5-5')
+  })
+
+  test('keeps a known model when the map no longer has it', async () => {
+    const rows = mergeAgents([row({ id: 'a', model: 'haiku' })], [info({ id: 'a' })], 1000, {})
+
+    expect(rows[0]?.model).toBe('haiku')
+  })
+
+  test('leaves the model out when it was not seen spawning', async () => {
+    const rows = mergeAgents([], [info({ id: 'a' })], 1000)
+
+    expect(rows[0]?.model).toBeUndefined()
+  })
+
+  test('strips control characters from the model', async () => {
+    const rows = mergeAgents([], [info({ id: 'a' })], 1000, { a: 'opus\u001b[31m' })
+
+    expect(rows[0]?.model).toBe('opus[31m')
+  })
+})
+
+describe('modelLabel', () => {
+  test('shortens a full id to family and version', async () => {
+    expect(modelLabel('claude-opus-5-5')).toBe('opus 5.5')
+    expect(modelLabel('claude-sonnet-4-5-20250929')).toBe('sonnet 4.5')
+    expect(modelLabel('claude-haiku-5-5[1m]')).toBe('haiku 5.5')
+  })
+
+  test('shows an alias or an unknown id as it is, without the prefix', async () => {
+    expect(modelLabel('haiku')).toBe('haiku')
+    expect(modelLabel('claude-fable')).toBe('fable')
+    expect(modelLabel('gpt-x')).toBe('gpt-x')
   })
 })
 

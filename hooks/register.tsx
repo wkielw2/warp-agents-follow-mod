@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeKey } from 'claude-code'
 
 import type { AgentRow, AgentRowStatus, AgentTreeLine } from '../types'
-import { buildAgentTree, formatElapsed, isActive, isLive, mergeAgents, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from './agents'
+import { buildAgentTree, formatElapsed, isActive, isLive, mergeAgents, modelLabel, statusText, stripUnsafeChars, tabTitle, titleSequence, ttyFromPs } from './agents'
 
 const PANE = 'agentes'
 const PANE_TITLE = 'Agentes'
@@ -18,6 +18,8 @@ const PS_ARGV = ['ps', '-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'tty=', '
 
 const agents = atom({ plugin: 'agentes-activos', key: 'agents' } as const, [])
 const now = atom({ plugin: 'agentes-activos', key: 'now' } as const, 0)
+// `$.agent.list()` does not say the model, so it is kept from each spawn.
+const models = atom({ plugin: 'agentes-activos', key: 'models' } as const, {})
 
 type StatusStyle = { icon: string; color: ThemeKey; word?: string }
 
@@ -86,8 +88,13 @@ async function tick($: EngineInterface): Promise<void> {
   if (session.isTicking) return
   session.isTicking = true
   try {
-    const [previous, infos, time] = await Promise.all([read($, agents), $.agent.list(), $.clock.now()])
-    const rows = mergeAgents(previous, infos, time)
+    const [previous, infos, time, modelsById] = await Promise.all([
+      read($, agents),
+      $.agent.list(),
+      $.clock.now(),
+      read($, models),
+    ])
+    const rows = mergeAgents(previous, infos, time, modelsById)
     const hasChanged = JSON.stringify(rows) !== JSON.stringify(previous)
 
     if (hasChanged) await update($, agents, () => rows)
@@ -139,6 +146,9 @@ export const register: Register = on => {
     const spawned = await next(e)
     if (spawned.agentId === undefined) return spawned
 
+    const { agentId, model } = spawned
+    await update($, models, previous => ({ ...previous, [agentId]: model })).catch(() => undefined)
+
     if (!session.hasAutoOpened) {
       session.hasAutoOpened = true
       void openPane($)
@@ -174,6 +184,7 @@ export const register: Register = on => {
       // Rows saved by an earlier version of the mod have no type.
       const type = stripUnsafeChars(row.type ?? row.label)
       const description = stripUnsafeChars(row.description)
+      const model = row.model === undefined ? undefined : modelLabel(row.model)
 
       return (
         <Box key={row.id} flexDirection="column">
@@ -185,6 +196,12 @@ export const register: Register = on => {
                 {label}
               </Text>
               {type !== label && <Text dimColor wrap="truncate-end"> {type}</Text>}
+              {model ? (
+                <Text color="suggestion" dimColor={!isRowActive} wrap="truncate-end">
+                  {' '}
+                  · {model}
+                </Text>
+              ) : null}
               {style.word && <Text color={style.color}> · {style.word}</Text>}
             </Box>
             <Text tabular color={isRowActive ? 'claude' : undefined} dimColor={!isRowActive}>
@@ -206,6 +223,7 @@ export const register: Register = on => {
       const style = STATUS_STYLE[row.status]
       const label = stripUnsafeChars(row.label)
       const description = stripUnsafeChars(row.description)
+      const model = row.model === undefined ? undefined : modelLabel(row.model)
 
       return (
         <Box key={row.id} flexDirection="row" justifyContent="space-between">
@@ -213,6 +231,7 @@ export const register: Register = on => {
             <Text color={style.color}>{style.icon} </Text>
             <Text dimColor wrap="truncate-end">
               {label}
+              {model ? ` · ${model}` : ''}
               {style.word ? ` · ${style.word}` : ''}
               {description ? ` · ${description}` : ''}
             </Text>

@@ -1,6 +1,6 @@
 {
   "name": "agentes-activos",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Live panel with the tree of running subagents, a status bar counter and the terminal tab title. / Panel en vivo con el árbol de subagentes en ejecución, contador en la barra de estado y título de la pestaña del terminal.",
   "author": {
     "name": "Jose Miniñi Diego"

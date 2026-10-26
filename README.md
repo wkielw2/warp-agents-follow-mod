@@ -6,7 +6,7 @@ Mod de Claude Code que muestra los subagentes en ejecución mientras trabajas: u
 
 ## Qué hace
 
-- **Panel «Agentes»**: árbol en vivo de los subagentes por quién lanzó a quién, con estado, tiempo y descripción. Los terminados se quedan 5 minutos (como mucho los 10 últimos) en la sección «Terminados»; un agente terminado con algún hijo aún en ejecución sigue en el árbol, atenuado.
+- **Panel «Agentes»**: árbol en vivo de los subagentes por quién lanzó a quién, con estado, modelo (`opus 5.5`, `haiku`…), tiempo y descripción. El modelo se toma al lanzarse cada agente, así que no aparece en los que ya corrían cuando se cargó el mod. Los terminados se quedan 5 minutos (como mucho los 10 últimos) en la sección «Terminados»; un agente terminado con algún hijo aún en ejecución sigue en el árbol, atenuado.
   - Se abre solo al lanzar el primer agente si la terminal tiene 144 columnas o más. Si es más estrecha, Claude Code lo deja en espera hasta que la ensanches o lo abras con `/agentes`.
   - En cualquier momento: `/agentes`.
 - **Barra de estado**: `🤖 N agentes en ejecución` mientras haya alguno activo.
@@ -35,7 +35,7 @@ Necesita Claude Code 2.1.303 o posterior: es un mod de *function hooks*, una API
 - Sin terminal, si `ps` no está disponible, falla o su salida llega truncada, no escribe ningún título.
 - Si una escritura del título falla, se reintenta en el siguiente tick sin afectar al panel.
 - Claude Code puede cambiar el título por su cuenta; el mod lo vuelve a escribir cada 10 s mientras hay agentes.
-- Los nombres y descripciones de los agentes se limpian de caracteres de control e invisibles antes de mostrarse o de escribirse en el título.
+- Los nombres, descripciones y modelos de los agentes se limpian de caracteres de control e invisibles antes de mostrarse o de escribirse en el título.
 
 ## Eventos que engancha
 
@@ -61,7 +61,7 @@ claude plugin validate . --strict
 claude plugin test .
 ```
 
-- `hooks/agents.ts`: lógica pura (árbol, tiempos, saneado de texto, búsqueda del terminal en la salida de `ps` y secuencia del título). Tests en `tests/agents.test.ts`.
+- `hooks/agents.ts`: lógica pura (árbol, tiempos, nombre corto del modelo, saneado de texto, búsqueda del terminal en la salida de `ps` y secuencia del título). Tests en `tests/agents.test.ts`.
 - `hooks/register.tsx`: engancha los eventos y dibuja el panel. Tests en `tests/register.test.tsx`, que simulan el motor con hooks por debajo del plugin (`agent.list`, `ui.open`, `ui.status` y `process.run` para el título).
 
 ## Privacidad
