@@ -30,6 +30,6 @@ export type AgentTreeLine = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agentes-activos': { agents: AgentRow[]; now: number; models: Record<string, string> }
+    'agentes-activos': { agents: AgentRow[]; now: number; models: Record<string, string>; hasAutoOpened: boolean }
   }
 }

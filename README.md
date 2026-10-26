@@ -7,7 +7,7 @@ Mod de Claude Code que muestra los subagentes en ejecución mientras trabajas: u
 ## Qué hace
 
 - **Panel «Agentes»**: árbol en vivo de los subagentes por quién lanzó a quién, con estado, modelo abreviado (`opus 5.5`, `sonnet 3.5`, `haiku`…; también entiende los ids de Bedrock y Vertex), tiempo y descripción. El modelo se toma al lanzarse cada agente, así que no aparece en los que ya corrían cuando se cargó el mod. Los terminados se quedan 5 minutos (como mucho los 10 últimos) en la sección «Terminados»; un agente terminado con algún hijo aún en ejecución sigue en el árbol, atenuado. Al salir de «Terminados», si el motor aún lo lista, el agente queda oculto (en memoria, sin guardar nada) para que no reaparezca; se olvida cuando el motor lo suelta y vuelve a mostrarse si se reanuda.
-  - Se abre solo al empezar cada sesión interactiva si la terminal tiene 144 columnas o más. Si es más estrecha, Claude Code lo deja en espera hasta que la ensanches o lo abras con `/agentes`. Si lo cierras, no vuelve a abrirse solo al lanzar un agente. En sesiones no interactivas se abre al lanzar el primer agente.
+  - Se abre solo al empezar cada sesión interactiva si la terminal tiene 144 columnas o más. Si es más estrecha, Claude Code lo deja en espera hasta que la ensanches o lo abras con `/agentes`. Si lo cierras, no vuelve a abrirse solo al lanzar un agente ni al recargarse el plugin. En sesiones no interactivas se abre al lanzar el primer agente.
   - En cualquier momento: `/agentes`.
 - **Barra de estado**: `🤖 N agentes en ejecución` mientras haya alguno activo.
 - **Título de la pestaña** (Warp, iTerm2, Terminal.app…): `🤖 N agentes · nombres`. Al terminar vuelve a «Claude Code».

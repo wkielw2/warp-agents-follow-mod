@@ -13,7 +13,7 @@ Política de privacidad del mod de Claude Code `agentes-activos`. Se aplica a to
 
 ## Qué hace con ellos
 
-- Todo se queda **en memoria** mientras dura la sesión. El mod no guarda nada en disco, no escribe registros y no usa el almacén persistente de Claude Code.
+- Todo se queda **en memoria** mientras dura la sesión. El mod no guarda nada en disco, no escribe registros y no usa el almacén persistente de Claude Code. Además de los datos anteriores, guarda una marca booleana («el panel ya se abrió solo») en el estado de la sesión, que vive en memoria del host y sirve para no reabrir un panel cerrado al recargar el plugin.
 - **No envía nada a ningún sitio**: no hace llamadas de red, no tiene servidores MCP, no recoge telemetría y no comparte datos con terceros, incluido su autor.
 - Lo único que escribe es el **título de la pestaña** en el terminal de la propia sesión, con `tee /dev/<terminal>`. El título solo lleva el número de agentes en ejecución y sus nombres, limpios de caracteres de control.
 

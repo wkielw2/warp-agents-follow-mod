@@ -20,6 +20,8 @@ const agents = atom({ plugin: 'agentes-activos', key: 'agents' } as const, [])
 const now = atom({ plugin: 'agentes-activos', key: 'now' } as const, 0)
 // `$.agent.list()` does not say the model, so it is kept from each spawn.
 const models = atom({ plugin: 'agentes-activos', key: 'models' } as const, {})
+// Kept in the session's state, not the module, so a reload does not reopen a pane the person closed.
+const hasAutoOpened = atom({ plugin: 'agentes-activos', key: 'hasAutoOpened' } as const, false)
 
 type StatusStyle = { icon: string; color: ThemeKey; word?: string }
 
@@ -48,8 +50,7 @@ const session: {
   lastStatus?: string
   ticksSinceTitle: number
   isTicking: boolean
-  hasAutoOpened: boolean
-} = { ticksSinceTitle: 0, isTicking: false, hasAutoOpened: false }
+} = { ticksSinceTitle: 0, isTicking: false }
 
 async function findTty($: EngineInterface): Promise<string | undefined> {
   const { exitCode, stdout, isStdoutTruncated } = await $.process.run(PS_ARGV, { timeoutMs: PROCESS_TIMEOUT_MS })
@@ -123,6 +124,21 @@ function openPane($: EngineInterface) {
   return $.ui.open({ id: PANE, title: PANE_TITLE })
 }
 
+// Opens the pane once per session unasked; never throws, as no caller awaits it.
+async function autoOpenPane($: EngineInterface): Promise<void> {
+  try {
+    // Read and set in one update, which retries on a conflict, so two calls at once open it once.
+    let wasOpened = true
+    await update($, hasAutoOpened, previous => {
+      wasOpened = previous
+      return true
+    })
+    if (!wasOpened) await openPane($)
+  } catch {
+    // The person can still open it with /agentes.
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -138,10 +154,7 @@ export const register: Register = on => {
       .catch(() => undefined)
     $.clock.every(TICK_MS, () => tick($))
     // Not awaited either; a pane closed afterwards is not reopened by a spawn.
-    if (e.isInteractive) {
-      session.hasAutoOpened = true
-      void openPane($).catch(() => undefined)
-    }
+    if (e.isInteractive) void autoOpenPane($)
 
     return started
   })
@@ -163,10 +176,7 @@ export const register: Register = on => {
       await update($, models, previous => ({ ...previous, [agentId]: model })).catch(() => undefined)
     }
 
-    if (!session.hasAutoOpened) {
-      session.hasAutoOpened = true
-      void openPane($)
-    }
+    void autoOpenPane($)
     void tick($)
 
     return spawned

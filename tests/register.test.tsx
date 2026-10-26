@@ -65,12 +65,16 @@ describe('opening at start', () => {
     }))
   }
 
+  // The pane is opened without being awaited: lets that open settle first.
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
   test('opens the pane when an interactive session starts', async ($, on) => {
     mock.clock(on)
     const engine = engineBeneath(on, [])
     startBeneath(on)
 
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await settle()
 
     expect(engine.opened).toEqual(['agentes'])
   })
@@ -81,6 +85,7 @@ describe('opening at start', () => {
     startBeneath(on)
 
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false })
+    await settle()
 
     expect(engine.opened).toEqual([])
   })
@@ -92,7 +97,9 @@ describe('opening at start', () => {
     on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
 
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await settle()
     await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+    await settle()
 
     expect(engine.opened).toEqual(['agentes'])
   })
@@ -109,6 +116,65 @@ describe('opening at start', () => {
     const started = await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
     expect(started).toEqual({ cwd: '/repo' })
+  })
+
+  test('does not reopen it after a reload of the plugin', async ($, on) => {
+    mock.clock(on)
+    const engine = engineBeneath(on, [])
+    startBeneath(on)
+
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await settle()
+    // A reload runs session.start again; the session's state keeps what the first load stored.
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await settle()
+
+    expect(engine.opened).toEqual(['agentes'])
+  })
+
+  test('opens the pane only on the first spawn when the session is not interactive', async ($, on) => {
+    mock.clock(on)
+    const engine = engineBeneath(on, [agent({ id: 'a' })])
+    startBeneath(on)
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false })
+    await $.agent.spawn({ prompt: 'Uno', subagentType: 'revisor' } as never)
+    await settle()
+    await $.agent.spawn({ prompt: 'Dos', subagentType: 'revisor' } as never)
+    await settle()
+
+    expect(engine.opened).toEqual(['agentes'])
+  })
+
+  test('opens it once when two agents are spawned at the same time', async ($, on) => {
+    mock.clock(on)
+    const engine = engineBeneath(on, [agent({ id: 'a' })])
+    startBeneath(on)
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false })
+    await Promise.all([
+      $.agent.spawn({ prompt: 'Uno', subagentType: 'revisor' } as never),
+      $.agent.spawn({ prompt: 'Dos', subagentType: 'revisor' } as never),
+    ])
+    await settle()
+
+    expect(engine.opened).toEqual(['agentes'])
+  })
+
+  test('spawns the agent even when opening the pane fails', async ($, on) => {
+    mock.clock(on)
+    on('agent.list', () => ({ value: [agent({ id: 'a' })] }))
+    on('ui.status', () => ({ value: undefined }))
+    on('ui.open', () => {
+      throw new Error('pane unavailable')
+    })
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a' }))
+
+    const spawned = await $.agent.spawn({ prompt: 'Prueba', subagentType: 'revisor' } as never)
+
+    expect(spawned.agentId).toBe('a')
   })
 })
 
