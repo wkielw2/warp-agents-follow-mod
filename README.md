@@ -12,6 +12,22 @@ Mod de Claude Code que muestra los subagentes en ejecución mientras trabajas: u
 - **Barra de estado**: `🤖 N agentes en ejecución` mientras haya alguno activo.
 - **Título de la pestaña** (Warp, iTerm2, Terminal.app…): `🤖 N agentes · nombres`. Al terminar vuelve a «Claude Code».
 
+## For directory reviewers
+
+Answers to the two review flags, "Mod can read local data and can also send data out" and "This plugin includes a mod". Everything is in two files: `hooks/register.tsx` and `hooks/agents.ts`.
+
+- **Local data it reads:**
+  - The list of subagents and the per-request token counts that Claude Code hands to the hooks (`agent.list`, `agent.spawn`, `turn.step`). Request and response text is never read.
+  - The system process list, once per session: `ps -A -ww -o pid= -o ppid= -o tty= -o command=` (`findTty` in `hooks/register.tsx`). It includes full command lines of all processes.
+  - Why: the mod API gives no pid for Claude Code, so the mod finds its own `ps` row by its exact command line and walks up the parent pids to the first terminal (`ttyFromPs` in `hooks/agents.ts`).
+  - The output is used only in memory, to extract one `/dev/ttys*` or `/dev/pts/*` path validated with a regex. It is not stored, logged or sent.
+- **What "send data out" is:** one `tee <tty path>` call (`writeTitle` in `hooks/register.tsx`) that writes an OSC 0 escape sequence (the tab title) to the terminal device of the session itself. It is local; no network is involved.
+  - The title contains only the number of running agents and their names, stripped of control and invisible characters (`titleSequence`, `stripUnsafeChars`). Nothing from `ps` reaches it.
+- **What it does not do:** no network code (no `fetch`, HTTP or WebSocket), no MCP servers, no telemetry, no files written to disk, no environment variables or credentials read, no downloaded code. Only `ps` and `tee` are run, with fixed arguments and no shell.
+- **Hook behaviour:** the hooks only observe. `agent.spawn` and `turn.step` pass the request and the result through unchanged.
+
+Details in [Qué ejecuta y qué datos usa](#qué-ejecuta-y-qué-datos-usa) (Spanish) and in [PRIVACY.md](PRIVACY.md).
+
 ## Instalación
 
 ```sh

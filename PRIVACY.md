@@ -4,6 +4,8 @@ Política de privacidad del mod de Claude Code `agentes-activos`. Se aplica a to
 
 *Privacy policy of the `agentes-activos` Claude Code mod: it reads only what it needs to draw the panel and the tab title, keeps it in memory, and sends nothing anywhere.*
 
+*For reviewers: the only local data read beyond the agent list is the process list from `ps` (once per session, kept in memory, used only to find the session's own terminal path). The only thing written is the tab title, via `tee` to that local terminal. No network, MCP, telemetry or disk writes. See "For directory reviewers" in the README.*
+
 ## Qué datos lee
 
 - **La lista de agentes de la sesión** que le da Claude Code: nombre, tipo, descripción, estado y tiempos de cada subagente. Sirve para dibujar el panel, el contador de la barra de estado y el título de la pestaña.
